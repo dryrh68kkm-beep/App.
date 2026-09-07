@@ -1,0 +1,18 @@
+{
+  "name": "MyList - Notes, Todo & Checklist",
+  "short_name": "MyList",
+  "description": "แอปบันทึกโน้ต จัดการ Todo และ Checklist ส่วนตัว ใช้งานได้แบบออฟไลน์",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6fb",
+  "theme_color": "#2563eb",
+  "lang": "th",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#2563eb" />
+<meta name="description" content="แอปบันทึกโน้ต จัดการ Todo และ Checklist ส่วนตัว" />
+<title>MyList - Notes, Todo & Checklist</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="MyList" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1 id="page-title">Notes</h1>
+    </header>
+
+    <main class="app-main">
+      <section id="panel-notes" class="panel" data-panel="notes">
+        <div class="empty-state" id="notes-empty">
+          <p>ยังไม่มีโน้ต</p>
+          <span>แตะปุ่ม + เพื่อเริ่มบันทึก</span>
+        </div>
+        <ul class="list" id="notes-list"></ul>
+      </section>
+
+      <section id="panel-todo" class="panel" data-panel="todo" hidden>
+        <div class="empty-state" id="todo-empty">
+          <p>ยังไม่มีรายการที่ต้องทำ</p>
+          <span>แตะปุ่ม + เพื่อเพิ่มงาน</span>
+        </div>
+        <ul class="list" id="todo-list"></ul>
+      </section>
+
+      <section id="panel-checklist" class="panel" data-panel="checklist" hidden>
+        <div class="empty-state" id="checklist-empty">
+          <p>ยังไม่มี Checklist</p>
+          <span>แตะปุ่ม + เพื่อสร้างรายการใหม่</span>
+        </div>
+        <div class="checklist-groups" id="checklist-groups"></div>
+      </section>
+    </main>
+
+    <button class="fab" id="fab-add" aria-label="เพิ่มรายการ">+</button>
+
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="notes">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M14 3v5h5" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Notes</span>
+      </button>
+      <button class="tab-btn" data-tab="todo">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 11l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" stroke-width="1.8"/></svg>
+        <span>Todo</span>
+      </button>
+      <button class="tab-btn" data-tab="checklist">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h2M4 12h2M4 18h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><rect x="4" y="5" width="2.2" height="2.2" rx="0.5" fill="currentColor"/><path d="M10 6h10M10 12h10M10 18h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>Checklist</span>
+      </button>
+    </nav>
+  </div>
+
+  <div class="sheet-backdrop" id="sheet-backdrop"></div>
+
+  <div class="sheet" id="note-sheet">
+    <div class="sheet-handle"></div>
+    <h2>บันทึกโน้ต</h2>
+    <input type="text" id="note-title" placeholder="หัวข้อ" maxlength="120" />
+    <textarea id="note-content" placeholder="รายละเอียด..." rows="6"></textarea>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" data-close-sheet="note-sheet">ยกเลิก</button>
+      <button class="btn btn-primary" id="note-save">บันทึก</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="todo-sheet">
+    <div class="sheet-handle"></div>
+    <h2>เพิ่มรายการที่ต้องทำ</h2>
+    <input type="text" id="todo-text" placeholder="สิ่งที่ต้องทำ" maxlength="200" />
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" data-close-sheet="todo-sheet">ยกเลิก</button>
+      <button class="btn btn-primary" id="todo-save">เพิ่ม</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="checklist-sheet">
+    <div class="sheet-handle"></div>
+    <h2>สร้าง Checklist ใหม่</h2>
+    <input type="text" id="checklist-title" placeholder="ชื่อ Checklist" maxlength="120" />
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" data-close-sheet="checklist-sheet">ยกเลิก</button>
+      <button class="btn btn-primary" id="checklist-save">สร้าง</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="checklist-item-sheet">
+    <div class="sheet-handle"></div>
+    <h2>เพิ่มรายการย่อย</h2>
+    <input type="text" id="checklist-item-text" placeholder="รายการ" maxlength="200" />
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" data-close-sheet="checklist-item-sheet">ยกเลิก</button>
+      <button class="btn btn-primary" id="checklist-item-save">เพิ่ม</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
