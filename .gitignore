@@ -1,0 +1,24 @@
+# ห้ามนำเอกสารพนักงานขึ้น repository นี้ (มาตรการเสริม)
+
+# เอกสาร
+*.pdf
+*.PDF
+*.zip
+*.ZIP
+*.xlsx
+*.xls
+*.csv
+
+# ภาพหน้าจอ (ยกเว้นไอคอนของแอป)
+*.png
+*.jpg
+*.jpeg
+*.heic
+!icons/*.png
+
+# log และไฟล์ชั่วคราว
+*.log
+__pycache__/
+.venv/
+node_modules/
+.DS_Store
