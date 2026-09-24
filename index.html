@@ -72,10 +72,19 @@
         <h2>กำหนดแผนก</h2>
         <p class="helper" id="assign-source"></p>
       </div>
-      <div class="card tip">
-        เลือกแผนกที่<b>หน้าแรกของแต่ละแผนก</b> หน้าถัดไปจะใช้แผนกเดียวกันจนกว่าจะเปลี่ยน · แตะภาพเพื่อดูทั้งหน้า
-      </div>
       <datalist id="dept-options"></datalist>
+
+      <div id="auto-groups" class="card auto" hidden>
+        <h3>แผนกที่แอปจัดให้</h3>
+        <p class="helper" id="auto-summary"></p>
+        <p class="helper">แอปเทียบภาพช่องชื่อหน่วยงานของทุกหน้า หน้าที่เหมือนกันอยู่กลุ่มเดียวกัน (ไม่ได้อ่านตัวหนังสือ)</p>
+        <ol id="auto-list" class="auto-list"></ol>
+      </div>
+
+      <h3 class="list-title">ตรวจ / แก้ทีละหน้า</h3>
+      <div class="card tip">
+        ถ้าต้องแก้ ให้เลือกแผนกที่<b>หน้าแรกของแต่ละแผนก</b> หน้าถัดไปจะใช้แผนกเดียวกันจนกว่าจะเปลี่ยน · แตะภาพเพื่อดูทั้งหน้า
+      </div>
       <ol id="page-list" class="page-list"></ol>
       <div class="actions">
         <button id="btn-new-2" class="btn secondary" type="button">เลือกไฟล์ใหม่</button>

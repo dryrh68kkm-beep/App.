@@ -1,5 +1,5 @@
 // Service worker: เก็บเฉพาะไฟล์ของแอปไว้ใช้ออฟไลน์ ไม่เก็บเอกสารพนักงาน
-const CACHE = "deptflow-v2.1.0";
+const CACHE = "deptflow-v2.2.0";
 const FILES = [
   "./",
   "index.html",
@@ -9,6 +9,7 @@ const FILES = [
   "detect.js",
   "splitter.js",
   "zip.js",
+  "signature.js",
   "manifest.webmanifest",
   "icons/icon.svg",
   "icons/icon-192.png",
