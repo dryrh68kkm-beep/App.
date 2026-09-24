@@ -464,6 +464,13 @@ function renderResult() {
   $("kpi-review").textContent = review ? review.pages.length : 0;
   $("kpi-review").parentElement.classList.toggle("warn", Boolean(review));
 
+  const deptCount = outputs.filter((o) => !o.review).length;
+  $("btn-share-all").textContent = `แชร์ทุกไฟล์ครั้งเดียว (${deptCount} ไฟล์)`;
+  $("btn-share-all").hidden = deptCount < 2;
+  $("share-all-note").hidden = deptCount < 2;
+  $("share-all-note").textContent = review
+    ? `ส่ง PDF แยกตามแผนกทั้ง ${deptCount} ไฟล์เข้ากลุ่มเดียวในครั้งเดียว (ไม่รวมไฟล์ "${REVIEW_NAME}")`
+    : `ส่ง PDF แยกตามแผนกทั้ง ${deptCount} ไฟล์เข้ากลุ่มเดียวในครั้งเดียว ถ้าแต่ละแผนกส่งคนละกลุ่ม ให้แชร์ทีละแผนกด้านล่าง`;
   $("group-list").replaceChildren(...outputs.map((o, k) => {
     const pages = o.pages.map((p) => p + 1);
     const buttons = [
@@ -487,31 +494,45 @@ function renderResult() {
 
 // ---------------------------------------------------------------- แชร์ / บันทึก
 
-let pendingShare = null;
+let pendingShare = [];
 
-function openShare(file, label) {
-  pendingShare = file;
-  $("share-title").textContent = `แชร์ ${file.name}`;
+const canShareFiles = (files) => Boolean(navigator.canShare && navigator.canShare({ files }));
+
+function openShare(fileOrFiles, label) {
+  const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+  pendingShare = files;
+  const many = files.length > 1;
+  $("share-title").textContent = many ? `แชร์ทุกไฟล์ (${files.length} ไฟล์)` : `แชร์ ${files[0].name}`;
+  $("share-confirm-text").textContent = many
+    ? `ยืนยันว่ากลุ่มปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของทุกแผนก (${files.length} แผนก)`
+    : "ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้";
+  $("share-list").hidden = !many;
+  $("share-list").textContent = many ? files.map((f) => f.name).join(" · ") : "";
   $("share-confirm").checked = false;
   $("share-status").textContent = "";
-  const can = Boolean(navigator.canShare && navigator.canShare({ files: [file] }));
+  const can = canShareFiles(files);
   $("share-fallback").hidden = can;
-  $("share-go").textContent = can ? "เปิดเมนูแชร์" : "ดาวน์โหลดไฟล์";
+  $("share-go").textContent = can ? "เปิดเมนูแชร์" : many ? "ดาวน์โหลด ZIP" : "ดาวน์โหลดไฟล์";
   $("share-go").disabled = true;
   $("share-dialog").showModal();
 }
 
+function shareAll() {
+  // ส่งทุกแผนกในครั้งเดียว เป็น PDF แยกไฟล์ตามแผนก (ไม่รวมไฟล์ "รอตรวจสอบ")
+  const files = outputs.filter((o) => !o.review).map((o) => o.file);
+  if (files.length) openShare(files, "ทั้งหมด");
+}
+
 async function doShare() {
-  const file = pendingShare;
-  if (!file || !$("share-confirm").checked) return;
-  const can = Boolean(navigator.canShare && navigator.canShare({ files: [file] }));
-  if (!can) {
-    download(file);
+  const files = pendingShare;
+  if (!files.length || !$("share-confirm").checked) return;
+  if (!canShareFiles(files)) {
+    download(files.length === 1 ? files[0] : await buildZip());
     $("share-dialog").close();
     return;
   }
   try {
-    await navigator.share({ files: [file], title: file.name });
+    await navigator.share({ files, title: files.length === 1 ? files[0].name : "DeptFlow" });
     $("share-dialog").close();
   } catch (e) {
     $("share-status").textContent = e.name === "AbortError" ? "ยกเลิกการแชร์" : "แชร์ไม่สำเร็จ กรุณาลองอีกครั้ง";
@@ -527,7 +548,7 @@ function download(file) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-async function saveZip() {
+async function buildZip() {
   const files = await Promise.all(outputs.map(async (o) => ({ name: o.filename, data: new Uint8Array(await o.file.arrayBuffer()) })));
   const lines = ["DeptFlow - สรุปการแยกไฟล์ตามแผนก", `ไฟล์ต้นฉบับ: ${total} หน้า`, ""];
   for (const o of outputs) lines.push(`${o.name}: ${o.pages.length} หน้า`);
@@ -535,7 +556,11 @@ async function saveZip() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-  const zip = new File([makeZip(files)], `DeptFlow_${stamp}.zip`, { type: "application/zip" });
+  return new File([makeZip(files)], `DeptFlow_${stamp}.zip`, { type: "application/zip" });
+}
+
+async function saveZip() {
+  const zip = await buildZip();
   if (IS_IOS) openShare(zip, "ทั้งหมด");
   else download(zip);
 }
@@ -548,7 +573,7 @@ async function closeDocument() {
   pdfDoc = null;
   srcBytes = null;
   outputs = [];
-  pendingShare = null;
+  pendingShare = [];
 }
 
 async function resetAll(ask) {
@@ -572,6 +597,7 @@ $("file-input").addEventListener("change", (e) => openFile(e.target.files[0]));
 $("btn-split").addEventListener("click", buildOutputs);
 $("btn-edit").addEventListener("click", () => { showStep(2); observeThumbnails(); });
 $("btn-zip").addEventListener("click", saveZip);
+$("btn-share-all").addEventListener("click", shareAll);
 $("btn-new").addEventListener("click", () => resetAll(false));
 $("btn-new-2").addEventListener("click", () => resetAll(false));
 $("btn-clear").addEventListener("click", () => resetAll(true));

@@ -176,6 +176,10 @@ canvas.dept-crop { display: block; width: 100%; aspect-ratio: 131 / 12; backgrou
 .kpi b { font-size: 26px; line-height: 1.2; }
 .kpi span { color: var(--text2); font-size: 13px; }
 .kpi.warn b { color: var(--warning); }
+.share-all { margin-bottom: 16px; }
+.share-all .btn { width: 100%; min-height: 54px; font-size: 16px; }
+.share-all .helper { text-align: center; }
+.share-list { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: var(--input); font-size: 13px; color: var(--text2); max-height: 120px; overflow: auto; }
 .group-list { display: grid; gap: 12px; }
 .group-list .card { margin: 0; padding: 16px; }
 .group-head { display: flex; gap: 12px; align-items: center; }

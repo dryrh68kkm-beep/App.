@@ -164,6 +164,44 @@ def run_auto_group(browser):
     print("✓ จัดแผนกอัตโนมัติ + จำชื่อได้ครั้งต่อไป")
 
 
+def run_share_all(browser):
+    """แชร์ทุกไฟล์ครั้งเดียว: ต้องยืนยันก่อน และส่ง PDF แยกตามแผนกครบทุกไฟล์ในการแชร์ครั้งเดียว"""
+    data = scanned_sample()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "scan.pdf"
+        path.write_bytes(data)
+        ctx = browser.new_context(viewport={"width": 390, "height": 844})
+        ctx.add_init_script(MOCK_SHARE + "window.__calls = 0; const _s = navigator.share; navigator.share = async (d) => { window.__calls++; return _s(d); };")
+        page = ctx.new_page()
+        page.goto(URL)
+        page.set_input_files("#file-input", str(path))
+        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "FSH-Seafood"]):
+            page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
+        page.click("#btn-split")
+        page.wait_for_selector("#step-result:not([hidden])")
+        assert "3 ไฟล์" in page.inner_text("#btn-share-all")
+        page.click("#btn-share-all")
+        page.wait_for_selector("#share-dialog[open]")
+        assert page.is_disabled("#share-go"), "ต้องยืนยันก่อนแชร์"
+        assert "ทุกแผนก" in page.inner_text("#share-confirm-text")
+        page.check("#share-confirm")
+        page.click("#share-go")
+        page.wait_for_timeout(500)
+        shared = page.locator("body").evaluate("() => window.__shared")
+        calls = page.locator("body").evaluate("() => window.__calls")
+        ctx.close()
+    assert calls == 1, calls
+    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "FSH-Seafood.pdf"], shared
+    src = pymupdf.open(stream=data, filetype="pdf")
+    out = []
+    for s in shared:
+        d = pymupdf.open(stream=base64.b64decode(s["b64"]), filetype="pdf")
+        out += [fingerprint(d, pg) for pg in d]
+    assert sorted(out) == sorted(fingerprint(src, pg) for pg in src)
+    print("✓ แชร์ทุกไฟล์ครั้งเดียว (3 PDF ในการแชร์ครั้งเดียว)")
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROMIUM) if CHROMIUM else p.chromium.launch()
@@ -173,6 +211,7 @@ def main():
         data, _ = text_sample()
         run_case(browser, "text", data, {}, ["แผนกจำลอง ก", "แผนกจำลอง ข", "แผนกจำลอง ค"])
         run_auto_group(browser)
+        run_share_all(browser)
         run_zip_and_offline(browser)
         browser.close()
     print("ผ่านทั้งหมด")
