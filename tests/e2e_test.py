@@ -115,6 +115,7 @@ def run_zip_and_offline(browser):
         page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
         page.fill('.dept-input[data-i="0"]', "A")
         page.fill('.dept-input[data-i="2"]', "B")
+        page.fill('.dept-input[data-i="4"]', "B")  # หน้า 5 เป็นกลุ่มใหม่จากภาพ ต้องใส่ชื่อด้วย
         page.click("#btn-split")
         page.wait_for_selector("#step-result:not([hidden])")
         page.click("#btn-zip")
@@ -132,6 +133,37 @@ def run_zip_and_offline(browser):
     print("✓ ZIP + ใช้งานออฟไลน์")
 
 
+def run_auto_group(browser):
+    """จัดแผนกอัตโนมัติจากภาพ: รอบแรกตั้งชื่อกลุ่ม รอบสองแอปต้องจำได้เอง"""
+    names = ["DRY-DryFood", "FSH-Produce", "FSH-Seafood"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "scan.pdf"
+        path.write_bytes(scanned_sample())
+        ctx = browser.new_context(viewport={"width": 390, "height": 844})
+        ctx.add_init_script(MOCK_SHARE)
+        page = ctx.new_page()
+        page.goto(URL)
+
+        page.set_input_files("#file-input", str(path))
+        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+        assert page.locator(".auto-row").count() == 3, "ต้องแยกได้ 3 กลุ่ม"
+        assert "ระบุแล้ว 0/5" in page.inner_text("#assign-count"), "ข้อมูลจำลองต้องไม่ถูกเดาชื่อจากลายเส้นที่รู้จัก"
+        for k, name in enumerate(names):
+            page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
+        assert "ระบุแล้ว 5/5" in page.inner_text("#assign-count")
+        page.click("#btn-split")
+        page.wait_for_selector("#step-result:not([hidden])")
+        page.click("#btn-new")
+
+        page.set_input_files("#file-input", str(path))
+        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+        got = [page.input_value(f'.auto-row[data-k="{k}"] .dept-input') for k in range(3)]
+        assert got == names, got
+        assert "ระบุแล้ว 5/5" in page.inner_text("#assign-count")
+        ctx.close()
+    print("✓ จัดแผนกอัตโนมัติ + จำชื่อได้ครั้งต่อไป")
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROMIUM) if CHROMIUM else p.chromium.launch()
@@ -140,6 +172,7 @@ def main():
                  ["DRY-DryFood", "FSH-Produce", "FSH-Seafood"])
         data, _ = text_sample()
         run_case(browser, "text", data, {}, ["แผนกจำลอง ก", "แผนกจำลอง ข", "แผนกจำลอง ค"])
+        run_auto_group(browser)
         run_zip_and_offline(browser)
         browser.close()
     print("ผ่านทั้งหมด")

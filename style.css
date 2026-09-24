@@ -161,6 +161,12 @@ canvas.thumb.ready { aspect-ratio: auto; background: #fff; }
 .progress-fill { height: 100%; width: 0; background: var(--blue); border-radius: 999px; transition: width 200ms; }
 .bottom-bar .btn { flex: none; min-width: 120px; }
 
+.card.auto { border-color: #BFE3F5; }
+.auto-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 12px; }
+.auto-row { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--input); }
+canvas.dept-crop { display: block; width: 100%; aspect-ratio: 131 / 12; background: #fff; }
+.list-title { margin: 22px 0 10px; font-size: 17px; }
+
 /* ---------- result ---------- */
 .coverage { display: inline-flex; padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 700; margin-bottom: 14px; }
 .coverage.ok { background: var(--success-soft); color: var(--success); }

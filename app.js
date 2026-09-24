@@ -3,8 +3,9 @@
 // ไฟล์ PDF อยู่ในหน่วยความจำเท่านั้น และถูกลบเมื่อกดล้างข้อมูลหรือปิดแอป
 
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
-import { DEPARTMENTS, HEADER_BOX } from "./config.js";
+import { DEPARTMENTS, DEPT_BOX, HEADER_BOX, KNOWN_SIGNATURES } from "./config.js";
 import { suggestDepartment } from "./detect.js";
+import { cluster, decode, encode, pageSignature, recall } from "./signature.js";
 import { REVIEW_NAME, pagesLabel, split, uniqueFilenames } from "./splitter.js";
 import { makeZip } from "./zip.js";
 
@@ -14,6 +15,8 @@ const $ = (id) => document.getElementById(id);
 const EXCLUDED = "\u0000excluded"; // หน้าที่ HR เลือก "ยกเว้น" ไปอยู่กลุ่มรอตรวจสอบ
 const STRIPES = 6;
 const CUSTOM_KEY = "deptflow.customDepartments"; // เก็บเฉพาะชื่อแผนกที่พิมพ์เพิ่ม ไม่มีข้อมูลพนักงาน
+const MEMORY_KEY = "deptflow.deptSignatures";    // ลายเส้นภาพชื่อหน่วยงาน → ชื่อแผนก (ไม่มีข้อมูลพนักงาน)
+const CLUSTER = "\u0000cluster:";                 // หน้านี้เริ่มกลุ่มที่แอปจัดให้ (ชื่อมาจากกลุ่ม)
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
@@ -24,6 +27,7 @@ let sourceName = "";
 let explicit = [];     // ชื่อแผนกที่กำหนดที่หน้านั้นโดยตรง (null = ใช้ตามหน้าก่อน)
 let origin = [];       // "file" = เติมจากข้อความในไฟล์, "user" = HR เลือกเอง
 let outputs = [];      // [{ name, filename, pages, file, review }]
+let groups = [];       // กลุ่มที่แอปจัดจากภาพชื่อหน่วยงาน: [{ sig, pages, name, source }]
 let renderObserver = null;
 
 function el(tag, attrs = {}, ...children) {
@@ -71,6 +75,69 @@ function rememberDepartments(names) {
   } catch { /* เบราว์เซอร์ไม่ให้เก็บ ไม่เป็นไร */ }
 }
 
+function loadMemory() {
+  let saved = [];
+  try {
+    saved = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]");
+    if (!Array.isArray(saved)) saved = [];
+  } catch { saved = []; }
+  return [...saved, ...KNOWN_SIGNATURES]
+    .filter((m) => m && typeof m.name === "string" && typeof m.sig === "string")
+    .map((m) => ({ name: m.name, sig: m.sig, bits: decode(m.sig) }));
+}
+
+function learnGroups() {
+  // จำลายเส้นของกลุ่มที่ทุกหน้าได้ชื่อแผนกเดียวกัน ครั้งหน้าจะใส่ชื่อให้เอง
+  const eff = effective();
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]"); } catch { saved = []; }
+  if (!Array.isArray(saved)) saved = [];
+  for (const g of groups) {
+    const names = new Set(g.pages.map((p) => eff[p]));
+    if (names.size !== 1) continue;
+    const [name] = names;
+    if (!name || name === REVIEW_NAME) continue;
+    const sig = encode(g.sig);
+    saved = saved.filter((m) => m.sig !== sig);
+    saved.push({ name, sig });
+  }
+  try { localStorage.setItem(MEMORY_KEY, JSON.stringify(saved.slice(-200))); } catch { /* ไม่เป็นไร */ }
+}
+
+async function autoGroup() {
+  // เทียบภาพช่องชื่อหน่วยงานของทุกหน้า แล้วใส่แผนกที่หน้าแรกของแต่ละกลุ่ม
+  const sigs = [];
+  for (let i = 0; i < total; i++) {
+    $("loading-text").textContent = `กำลังจัดกลุ่มแผนกจากภาพ ${i + 1}/${total}...`;
+    sigs.push(await pageSignature(await pdfDoc.getPage(i + 1), DEPT_BOX).catch(() => null));
+  }
+  const { clusterOf, clusters } = cluster(sigs);
+  const memory = loadMemory();
+  groups = clusters.map((c) => {
+    const fromFile = c.pages.map((p) => (origin[p] === "file" ? explicit[p] : null)).find(Boolean);
+    const remembered = fromFile ? null : recall(c.sig, memory);
+    return { ...c, name: fromFile || remembered || null, source: fromFile ? "file" : remembered ? "memory" : "new" };
+  });
+  if (groups.length < 2 && !groups.some((g) => g.name)) {
+    groups = []; // ไม่พบช่องชื่อหน่วยงานที่ต่างกัน ให้ HR เลือกเองทีละหน้า
+    return;
+  }
+  let last = null;
+  clusterOf.forEach((k, i) => {
+    if (k === null) return;
+    if (k !== last && origin[i] !== "user") {
+      explicit[i] = `${CLUSTER}${k}`;
+      origin[i] = "auto";
+    } else if (origin[i] === "file") {
+      explicit[i] = null; // กลุ่มเป็นคนกำหนดแล้ว ไม่ต้องซ้ำ
+      origin[i] = null;
+    }
+    last = k;
+  });
+}
+
+const clusterIndex = (v) => (typeof v === "string" && v.startsWith(CLUSTER) ? Number(v.slice(CLUSTER.length)) : -1);
+
 // ---------------------------------------------------------------- เปิดไฟล์
 
 async function openFile(file) {
@@ -94,6 +161,7 @@ async function openFile(file) {
     explicit = new Array(total).fill(null);
     origin = new Array(total).fill(null);
     outputs = [];
+    groups = [];
 
     $("loading-text").textContent = "กำลังดูว่ามีชื่อแผนกในไฟล์หรือไม่...";
     let prev = null;
@@ -102,6 +170,7 @@ async function openFile(file) {
       if (s && s !== prev) { explicit[i] = s; origin[i] = "file"; }
       if (s) prev = s;
     }
+    await autoGroup();
     renderAssign();
     showStep(2);
   } catch (e) {
@@ -150,11 +219,12 @@ function observeThumbnails() {
       const canvas = entry.target;
       renderObserver.unobserve(canvas);
       const width = Math.min(1100, Math.round(canvas.clientWidth * (window.devicePixelRatio || 1)) || 800);
-      renderQueued(() => renderRegion(Number(canvas.dataset.page), canvas, HEADER_BOX, width)
+      const box = canvas.dataset.crop === "dept" ? DEPT_BOX : HEADER_BOX;
+      renderQueued(() => renderRegion(Number(canvas.dataset.page), canvas, box, width)
         .then(() => canvas.classList.add("ready")));
     }
   }, { rootMargin: "600px 0px" });
-  document.querySelectorAll("canvas.thumb").forEach((c) => renderObserver.observe(c));
+  document.querySelectorAll("canvas.thumb, canvas.dept-crop").forEach((c) => renderObserver.observe(c));
 }
 
 // ---------------------------------------------------------------- ดูทั้งหน้า
@@ -184,7 +254,9 @@ function effective() {
   let current = null;
   for (const v of explicit) {
     if (v === EXCLUDED) { out.push(null); continue; }
-    if (v) current = v;
+    const k = clusterIndex(v);
+    if (k >= 0) current = groups[k]?.name || null; // กลุ่มที่ยังไม่ตั้งชื่อ = ยังไม่ระบุ
+    else if (v) current = v;
     out.push(current);
   }
   return out;
@@ -194,8 +266,55 @@ function renderAssign() {
   $("assign-source").textContent = `${sourceName} · ${total} หน้า`;
   $("split-error").hidden = true;
   $("page-list").replaceChildren(...explicit.map((_, i) => pageRow(i)));
+  renderGroups();
   refreshAssign();
   observeThumbnails();
+}
+
+function renderGroups() {
+  const panel = $("auto-groups");
+  panel.hidden = groups.length === 0;
+  if (!groups.length) return;
+  const known = groups.filter((g) => g.name).length;
+  $("auto-summary").textContent = known === groups.length
+    ? `พบ ${groups.length} แผนก ตั้งชื่อครบแล้ว ตรวจภาพอีกครั้งแล้วกดสร้างไฟล์ได้เลย`
+    : `พบ ${groups.length} แผนก · ตั้งชื่อแล้ว ${known} · ใส่ชื่อแผนกที่เหลือ (ครั้งเดียว ครั้งหน้าแอปจำได้)`;
+  $("auto-list").replaceChildren(...groups.map((g, k) => {
+    const input = el("input", {
+      class: "dept-input", type: "text", list: "dept-options", autocomplete: "off",
+      autocapitalize: "off", spellcheck: "false", enterkeyhint: "done",
+      placeholder: "ชื่อแผนกของกลุ่มนี้", "aria-label": `ชื่อแผนกกลุ่มที่ ${k + 1}`,
+    });
+    input.value = g.name || "";
+    input.addEventListener("input", () => {
+      g.name = input.value.replace(/\s+/g, " ").trim() || null;
+      g.source = g.name ? "user" : "new";
+      refreshAssign();
+      refreshGroupTags();
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
+    const canvas = el("canvas", { class: "dept-crop", "data-page": String(g.pages[0] + 1), "data-crop": "dept" });
+    return el("li", { class: "auto-row", "data-k": String(k) },
+      el("div", { class: "row-head" },
+        el("span", { class: "page-no", text: `กลุ่ม ${k + 1} · ${g.pages.length} หน้า · หน้า ${pagesLabel(g.pages.map((p) => p + 1))}` }),
+        el("span", { class: "tag" })),
+      el("button", { class: "thumb-button", type: "button", title: "ดูทั้งหน้า",
+        onclick: () => openViewer(g.pages, 0, `กลุ่ม ${k + 1}`) }, canvas),
+      input);
+  }));
+  refreshGroupTags();
+}
+
+function refreshGroupTags() {
+  document.querySelectorAll(".auto-row").forEach((row) => {
+    const g = groups[Number(row.dataset.k)];
+    const tag = row.querySelector(".tag");
+    tag.className = "tag";
+    if (!g.name) { tag.textContent = "ใส่ชื่อ"; tag.classList.add("warn"); }
+    else if (g.source === "memory") { tag.textContent = "จำได้จากครั้งก่อน"; tag.classList.add("file"); }
+    else if (g.source === "file") { tag.textContent = "อ่านจากไฟล์"; tag.classList.add("file"); }
+    else { tag.textContent = "ตั้งชื่อแล้ว"; tag.classList.add("start"); }
+  });
 }
 
 function pageRow(i) {
@@ -243,7 +362,8 @@ function refreshAssign(skipInputIndex = -1) {
     const tag = row.querySelector(".tag");
     const exclude = row.querySelector(".ghost");
     const isExcluded = explicit[i] === EXCLUDED;
-    if (i !== skipInputIndex) input.value = isExcluded || !explicit[i] ? "" : explicit[i];
+    const k = clusterIndex(explicit[i]);
+    if (i !== skipInputIndex) input.value = isExcluded || !explicit[i] ? "" : k >= 0 ? (groups[k]?.name || "") : explicit[i];
     input.disabled = isExcluded;
     input.placeholder = isExcluded ? "ยกเว้นหน้านี้ (ไปรอตรวจสอบ)"
       : eff[i] ? `ตามหน้าก่อน: ${eff[i]}` : "เลือกหรือพิมพ์ชื่อแผนก";
@@ -256,6 +376,8 @@ function refreshAssign(skipInputIndex = -1) {
 
     tag.className = "tag";
     if (isExcluded) { tag.textContent = "ยกเว้น"; tag.classList.add("warn"); }
+    else if (k >= 0 && !eff[i]) { tag.textContent = `กลุ่ม ${k + 1} · ใส่ชื่อด้านบน`; tag.classList.add("warn"); }
+    else if (k >= 0) { tag.textContent = `แอปจัดให้ · กลุ่ม ${k + 1}`; tag.classList.add("file"); }
     else if (explicit[i] && origin[i] === "file") { tag.textContent = "อ่านจากไฟล์ · ตรวจอีกครั้ง"; tag.classList.add("file"); }
     else if (explicit[i]) { tag.textContent = "เริ่มแผนกใหม่"; tag.classList.add("start"); }
     else if (eff[i]) { tag.textContent = "ตามหน้าก่อน"; }
@@ -285,13 +407,13 @@ async function buildOutputs() {
   button.disabled = true;
   button.textContent = "กำลังสร้าง...";
   try {
-    const groups = split(eff, total);
-    const filenames = uniqueFilenames(groups.map((g) => g.name));
+    const parts = split(eff, total);
+    const filenames = uniqueFilenames(parts.map((g) => g.name));
     const { PDFDocument } = window.PDFLib;
     const src = await PDFDocument.load(srcBytes, { updateMetadata: false });
     const built = [];
-    for (let k = 0; k < groups.length; k++) {
-      const g = groups[k];
+    for (let k = 0; k < parts.length; k++) {
+      const g = parts[k];
       const out = await PDFDocument.create({ updateMetadata: false });
       const copied = await out.copyPages(src, g.pages);
       copied.forEach((p) => out.addPage(p));
@@ -304,7 +426,8 @@ async function buildOutputs() {
       });
     }
     outputs = built;
-    rememberDepartments(groups.map((g) => g.name));
+    rememberDepartments(split(eff, total).map((g) => g.name));
+    learnGroups();
     renderResult();
     showStep(3);
   } catch (e) {
@@ -435,7 +558,9 @@ async function resetAll(ask) {
   sourceName = "";
   explicit = [];
   origin = [];
+  groups = [];
   $("page-list").replaceChildren();
+  $("auto-list").replaceChildren();
   $("group-list").replaceChildren();
   $("pv-canvas").width = 0;
   showStep(1);
