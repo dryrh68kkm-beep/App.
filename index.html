@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#F3FAFC">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="DeptFlow">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>DeptFlow</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M4 5h9l3 3v11H4z"/><path d="M13 5v3h3"/><path d="M16 12h4v7h-4"/><path d="M7 12h6M7 15h6"/></svg>
+      </div>
+      <div>
+        <h1>DeptFlow</h1>
+        <p>แยกไฟล์ PDF พนักงานตามแผนก</p>
+      </div>
+    </div>
+    <span class="badge-private">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      ในเครื่องเท่านั้น
+    </span>
+  </header>
+
+  <main>
+    <ol class="steps" aria-label="ขั้นตอน">
+      <li id="step-dot-1" class="active">1 เลือกไฟล์</li>
+      <li id="step-dot-2">2 กำหนดแผนก</li>
+      <li id="step-dot-3">3 แชร์</li>
+    </ol>
+
+    <!-- ขั้นที่ 1 -->
+    <section id="step-upload">
+      <div class="card">
+        <h2>เลือกไฟล์ PDF รวม</h2>
+        <p class="helper">ไฟล์ถูกเปิดและแยกในมือถือเครื่องนี้ ไม่ถูกส่งไปที่ใด</p>
+        <label id="dropzone" class="dropzone" for="file-input">
+          <div class="icon-box blue" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+          </div>
+          <strong>แตะเพื่อเลือกไฟล์ PDF</strong>
+          <span class="helper">ใช้ได้ทั้งไฟล์ข้อความและไฟล์สแกน</span>
+          <input id="file-input" type="file" accept="application/pdf,.pdf">
+        </label>
+        <div id="loading" class="loading" hidden>
+          <div class="spinner" aria-hidden="true"></div>
+          <span id="loading-text">กำลังเปิดไฟล์...</span>
+        </div>
+        <p id="upload-error" class="error" hidden></p>
+      </div>
+
+      <div id="install-hint" class="card soft" hidden>
+        <h3>ติดตั้งเป็นแอปบน iPhone</h3>
+        <p class="helper">แตะปุ่มแชร์ของ Safari แล้วเลือก <b>เพิ่มไปยังหน้าจอโฮม</b> หลังจากนั้นเปิดใช้ได้แม้ไม่มีอินเทอร์เน็ต</p>
+      </div>
+    </section>
+
+    <!-- ขั้นที่ 2 -->
+    <section id="step-assign" hidden>
+      <div class="section-head">
+        <h2>กำหนดแผนก</h2>
+        <p class="helper" id="assign-source"></p>
+      </div>
+      <div class="card tip">
+        เลือกแผนกที่<b>หน้าแรกของแต่ละแผนก</b> หน้าถัดไปจะใช้แผนกเดียวกันจนกว่าจะเปลี่ยน · แตะภาพเพื่อดูทั้งหน้า
+      </div>
+      <datalist id="dept-options"></datalist>
+      <ol id="page-list" class="page-list"></ol>
+      <div class="actions">
+        <button id="btn-new-2" class="btn secondary" type="button">เลือกไฟล์ใหม่</button>
+        <button id="btn-clear-2" class="btn danger-outline" type="button">ล้างข้อมูล</button>
+      </div>
+      <p id="split-error" class="error" hidden></p>
+      <div class="bottom-bar">
+        <div class="bottom-count">
+          <span id="assign-count">0 / 0</span>
+          <div class="progress"><div id="assign-fill" class="progress-fill"></div></div>
+        </div>
+        <button id="btn-split" class="btn primary" type="button">สร้างไฟล์</button>
+      </div>
+    </section>
+
+    <!-- ขั้นที่ 3 -->
+    <section id="step-result" hidden>
+      <div class="section-head">
+        <h2>ไฟล์แยกตามแผนก</h2>
+        <p class="helper" id="source-name"></p>
+      </div>
+      <div class="coverage" id="coverage"></div>
+      <div class="kpis">
+        <div class="kpi"><b id="kpi-pages">0</b><span>หน้า</span></div>
+        <div class="kpi"><b id="kpi-depts">0</b><span>แผนก</span></div>
+        <div class="kpi"><b id="kpi-review">0</b><span>รอตรวจสอบ</span></div>
+      </div>
+      <div id="group-list" class="group-list"></div>
+      <div class="actions">
+        <button id="btn-zip" class="btn secondary" type="button">บันทึกทั้งหมด (ZIP)</button>
+        <button id="btn-edit" class="btn secondary" type="button">แก้แผนก</button>
+        <button id="btn-new" class="btn secondary" type="button">ไฟล์ใหม่</button>
+        <button id="btn-clear" class="btn danger-outline" type="button">ล้างข้อมูล</button>
+      </div>
+    </section>
+
+    <p class="footnote">เอกสารอยู่ในหน่วยความจำของแอปเท่านั้น ถูกลบเมื่อกดล้างข้อมูลหรือปิดแอป</p>
+  </main>
+
+  <!-- แชร์ -->
+  <dialog id="share-dialog" class="sheet">
+    <div class="sheet-body">
+      <h3 id="share-title">แชร์ไฟล์</h3>
+      <p class="helper">จะเปิดเมนูแชร์ของเครื่อง ให้คุณเลือก LINE กลุ่มและกดส่งเอง แอปไม่ส่งอะไรออกไปอัตโนมัติ</p>
+      <label class="check">
+        <input type="checkbox" id="share-confirm">
+        <span>ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้</span>
+      </label>
+      <p id="share-fallback" class="notice" hidden>เครื่องนี้แชร์ไฟล์โดยตรงไม่ได้ ให้ดาวน์โหลดไฟล์แล้วแนบใน LINE เอง</p>
+      <p id="share-status" class="helper"></p>
+      <div class="sheet-actions">
+        <button id="share-cancel" type="button" class="btn secondary">ยกเลิก</button>
+        <button id="share-go" type="button" class="btn primary" disabled>เปิดเมนูแชร์</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ดูหน้า -->
+  <dialog id="preview-dialog" class="viewer">
+    <div class="viewer-bar">
+      <button id="pv-close" type="button" class="btn secondary small">ปิด</button>
+      <span id="pv-title"></span>
+      <div class="viewer-nav">
+        <button id="pv-prev" type="button" class="btn secondary small" aria-label="หน้าก่อน">‹</button>
+        <button id="pv-next" type="button" class="btn secondary small" aria-label="หน้าถัดไป">›</button>
+      </div>
+    </div>
+    <div class="viewer-body"><canvas id="pv-canvas"></canvas></div>
+  </dialog>
+
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
