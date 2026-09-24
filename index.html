@@ -112,6 +112,10 @@
         <div class="kpi"><b id="kpi-depts">0</b><span>แผนก</span></div>
         <div class="kpi"><b id="kpi-review">0</b><span>รอตรวจสอบ</span></div>
       </div>
+      <div class="share-all">
+        <button id="btn-share-all" class="btn primary" type="button" hidden>แชร์ทุกไฟล์ครั้งเดียว</button>
+        <p id="share-all-note" class="helper" hidden></p>
+      </div>
       <div id="group-list" class="group-list"></div>
       <div class="actions">
         <button id="btn-zip" class="btn secondary" type="button">บันทึกทั้งหมด (ZIP)</button>
@@ -131,8 +135,9 @@
       <p class="helper">จะเปิดเมนูแชร์ของเครื่อง ให้คุณเลือก LINE กลุ่มและกดส่งเอง แอปไม่ส่งอะไรออกไปอัตโนมัติ</p>
       <label class="check">
         <input type="checkbox" id="share-confirm">
-        <span>ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้</span>
+        <span id="share-confirm-text">ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้</span>
       </label>
+      <p id="share-list" class="share-list" hidden></p>
       <p id="share-fallback" class="notice" hidden>เครื่องนี้แชร์ไฟล์โดยตรงไม่ได้ ให้ดาวน์โหลดไฟล์แล้วแนบใน LINE เอง</p>
       <p id="share-status" class="helper"></p>
       <div class="sheet-actions">
