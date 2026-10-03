@@ -1,5 +1,5 @@
 // Service worker: เก็บเฉพาะไฟล์ของแอปไว้ใช้ออฟไลน์ ไม่เก็บเอกสารพนักงาน
-const CACHE = "deptflow-v2.5.0";
+const CACHE = "deptflow-v2.5.1";
 const FILES = [
   "./",
   "index.html",
@@ -35,5 +35,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
-  event.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit || fetch(req)));
+  // มีเน็ต: โหลดรุ่นล่าสุดเสมอ แล้วเก็บไว้ใช้ออฟไลน์ · ไม่มีเน็ต: ใช้รุ่นที่เก็บไว้
+  event.respondWith(
+    fetch(req, { cache: "no-cache" })
+      .then((res) => {
+        if (res.ok && res.type === "basic") {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(req, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(req, { ignoreSearch: true })),
+  );
 });

@@ -723,5 +723,10 @@ $("install-hint").hidden = !(IS_IOS && !navigator.standalone);
 
 // ใช้งานออฟไลน์ได้หลังเปิดครั้งแรก (เก็บเฉพาะไฟล์ของแอป ไม่เก็บเอกสาร)
 if ("serviceWorker" in navigator && (location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname))) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.register("sw.js").catch(() => {});
+  // มีรุ่นใหม่: โหลดหน้าใหม่ให้เอง (เฉพาะตอนยังไม่ได้เปิดไฟล์ งานที่ทำอยู่จะไม่หาย)
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !pdfDoc) location.reload();
+  });
 }
