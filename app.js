@@ -5,7 +5,9 @@
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
 import { DEPARTMENTS, DEPT_BOX, HEADER_BOX, KNOWN_SIGNATURES } from "./config.js";
 import { suggestDepartment } from "./detect.js";
-import { cluster, decode, encode, pageSignature, recall } from "./signature.js";
+import {
+  SEARCH_BOX, bandSignature, cluster, decode, encode, findBands, pageSignature, recall, renderPixels,
+} from "./signature.js";
 import { REVIEW_NAME, pagesLabel, split, uniqueFilenames } from "./splitter.js";
 import { makeZip } from "./zip.js";
 
@@ -28,6 +30,14 @@ let explicit = [];     // ชื่อแผนกที่กำหนดที
 let origin = [];       // "file" = เติมจากข้อความในไฟล์, "user" = HR เลือกเอง
 let outputs = [];      // [{ name, filename, pages, file, review }]
 let groups = [];       // กลุ่มที่แอปจัดจากภาพชื่อหน่วยงาน: [{ sig, pages, name, source }]
+let deptBox = DEPT_BOX; // กรอบช่องชื่อหน่วยงานที่ใช้จริงกับไฟล์นี้ (ใช้แสดงภาพในกลุ่ม)
+let skipAuto = false;   // HR กด "ข้าม" ระหว่างจัดกลุ่ม
+const PAGE_TIMEOUT = 8000;
+
+const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // ให้หน้าจอได้อัปเดต ไม่ค้าง
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+}
 let renderObserver = null;
 
 function el(tag, attrs = {}, ...children) {
@@ -104,15 +114,78 @@ function learnGroups() {
   try { localStorage.setItem(MEMORY_KEY, JSON.stringify(saved.slice(-200))); } catch { /* ไม่เป็นไร */ }
 }
 
+function sampleIndexes(n, max = 30) {
+  // ใช้หน้าที่ติดกันตั้งแต่ต้นไฟล์ เพราะหน้าติดกันมักเป็นแผนกเดียวกัน จึงเห็นว่าบรรทัดไหน "ซ้ำเป็นกลุ่ม"
+  return [...Array(Math.min(n, max)).keys()];
+}
+
+function goodGrouping(sigs, memory) {
+  // บรรทัดที่ใช้ได้ต้อง: มีหมึกเกือบทุกหน้า และ "ซ้ำเป็นกลุ่ม" (ไม่เหมือนกันทุกหน้า และไม่ต่างกันทุกหน้า)
+  const present = sigs.filter(Boolean);
+  if (present.length < Math.ceil(sigs.length * 0.8)) return false;
+  const k = cluster(present).clusters.length;
+  if (k >= 2 && k <= Math.max(2, Math.floor(present.length * 0.8))) return true;
+  return k === 1 && present.some((sig) => recall(sig, memory)); // ไฟล์มีแผนกเดียวที่รู้จัก
+}
+
+async function pageWork(i, fn) {
+  const page = await pdfDoc.getPage(i + 1);
+  return withTimeout(fn(page).catch(() => null), PAGE_TIMEOUT);
+}
+
 async function autoGroup() {
   // เทียบภาพช่องชื่อหน่วยงานของทุกหน้า แล้วใส่แผนกที่หน้าแรกของแต่ละกลุ่ม
-  const sigs = [];
-  for (let i = 0; i < total; i++) {
-    $("loading-text").textContent = `กำลังจัดกลุ่มแผนกจากภาพ ${i + 1}/${total}...`;
-    sigs.push(await pageSignature(await pdfDoc.getPage(i + 1), DEPT_BOX).catch(() => null));
+  const memory = loadMemory();
+  const sample = sampleIndexes(total);
+  const status = (text) => { $("loading-text").textContent = text; };
+
+  // 1) ลองกรอบที่รู้จัก (รายงานแบบสแกน A4) ก่อน
+  let sigOf = (page) => pageSignature(page, DEPT_BOX);
+  deptBox = DEPT_BOX;
+  const fixed = [];
+  for (const i of sample) {
+    if (skipAuto) return;
+    status(`กำลังหาช่องชื่อหน่วยงาน ${fixed.length + 1}/${sample.length}...`);
+    fixed.push(await pageWork(i, sigOf));
+    await nextFrame();
+  }
+  let sigs = [];
+  if (goodGrouping(fixed, memory)) {
+    sigs = fixed; // หน้าตัวอย่างทำแล้ว ไม่ต้องวาดซ้ำ
+  } else {
+    // 2) รายงานรูปแบบอื่น: หาบรรทัดที่ซ้ำเป็นกลุ่มในฝั่งขวาของหัวเอกสารเอง
+    const pixels = [];
+    for (const i of sample) {
+      if (skipAuto) return;
+      status(`กำลังหาช่องชื่อหน่วยงาน (รูปแบบใหม่) ${pixels.length + 1}/${sample.length}...`);
+      pixels.push(await pageWork(i, (page) => renderPixels(page, SEARCH_BOX, 480)));
+      await nextFrame();
+    }
+    const first = pixels.find(Boolean);
+    const bands = first ? findBands(first) : [];
+    let best = null;
+    for (const band of bands) {
+      const sigs = pixels.map((px) => (px ? bandSignature(px, band) : null));
+      if (!goodGrouping(sigs, memory)) continue;
+      const ink = sigs.filter(Boolean).reduce((s, b) => s + b.reduce((a, v) => a + v, 0), 0);
+      if (!best || ink > best.ink) best = { band, ink };
+    }
+    pixels.length = 0;
+    if (!best) { groups = []; return; } // ไม่พบช่องชื่อหน่วยงาน ให้ HR เลือกเองทีละหน้า
+    const { band } = best;
+    const fy = (v) => SEARCH_BOX[1] + v * (SEARCH_BOX[3] - SEARCH_BOX[1]);
+    deptBox = [SEARCH_BOX[0], fy(band.y0), SEARCH_BOX[2], fy(band.y1)];
+    sigOf = async (page) => bandSignature(await renderPixels(page, SEARCH_BOX, 480), band);
+  }
+
+  // 3) ทุกหน้า
+  for (let i = sigs.length; i < total; i++) {
+    if (skipAuto) return;
+    status(`กำลังจัดกลุ่มแผนกจากภาพ ${i + 1}/${total}...`);
+    sigs.push(await pageWork(i, sigOf));
+    if (i % 2 === 1) await nextFrame();
   }
   const { clusterOf, clusters } = cluster(sigs);
-  const memory = loadMemory();
   groups = clusters.map((c) => {
     const fromFile = c.pages.map((p) => (origin[p] === "file" ? explicit[p] : null)).find(Boolean);
     const remembered = fromFile ? null : recall(c.sig, memory);
@@ -163,14 +236,18 @@ async function openFile(file) {
     outputs = [];
     groups = [];
 
-    $("loading-text").textContent = "กำลังดูว่ามีชื่อแผนกในไฟล์หรือไม่...";
+    skipAuto = false;
+    $("btn-skip").hidden = false;
     let prev = null;
-    for (let i = 0; i < total; i++) {
-      const s = await suggestDepartment(await pdfDoc.getPage(i + 1)).catch(() => null);
+    for (let i = 0; i < total && !skipAuto; i++) {
+      $("loading-text").textContent = `กำลังดูข้อความในไฟล์ ${i + 1}/${total}...`;
+      const s = await pageWork(i, suggestDepartment);
       if (s && s !== prev) { explicit[i] = s; origin[i] = "file"; }
       if (s) prev = s;
+      if (i % 4 === 3) await nextFrame();
     }
     await autoGroup();
+    if (skipAuto) groups = [];
     renderAssign();
     showStep(2);
   } catch (e) {
@@ -180,6 +257,7 @@ async function openFile(file) {
     showError("upload-error", msg);
   } finally {
     $("loading").hidden = true;
+    $("btn-skip").hidden = true;
     $("loading-text").textContent = "กำลังเปิดไฟล์...";
     $("dropzone").hidden = false;
     $("file-input").value = "";
@@ -209,6 +287,7 @@ async function renderRegion(pageNo, canvas, box, targetWidth) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: ctx, viewport: vp, transform: [1, 0, 0, 1, -x0 * vp.width, -y0 * vp.height] }).promise;
+  page.cleanup();
 }
 
 function observeThumbnails() {
@@ -218,8 +297,8 @@ function observeThumbnails() {
       if (!entry.isIntersecting) continue;
       const canvas = entry.target;
       renderObserver.unobserve(canvas);
-      const width = Math.min(1100, Math.round(canvas.clientWidth * (window.devicePixelRatio || 1)) || 800);
-      const box = canvas.dataset.crop === "dept" ? DEPT_BOX : HEADER_BOX;
+      const width = Math.min(900, Math.round(canvas.clientWidth * Math.min(2, window.devicePixelRatio || 1)) || 700);
+      const box = canvas.dataset.crop === "dept" ? deptBox : HEADER_BOX;
       renderQueued(() => renderRegion(Number(canvas.dataset.page), canvas, box, width)
         .then(() => canvas.classList.add("ready")));
     }
@@ -265,6 +344,8 @@ function effective() {
 function renderAssign() {
   $("assign-source").textContent = `${sourceName} · ${total} หน้า`;
   $("split-error").hidden = true;
+  clearTimeout(refreshTimer);
+  refreshTimer = 0;
   $("page-list").replaceChildren(...explicit.map((_, i) => pageRow(i)));
   renderGroups();
   refreshAssign();
@@ -289,7 +370,7 @@ function renderGroups() {
     input.addEventListener("input", () => {
       g.name = input.value.replace(/\s+/g, " ").trim() || null;
       g.source = g.name ? "user" : "new";
-      refreshAssign();
+      refreshSoon();
       refreshGroupTags();
     });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
@@ -328,7 +409,7 @@ function pageRow(i) {
     const v = input.value.replace(/\s+/g, " ").trim();
     explicit[i] = v || null;
     origin[i] = v ? "user" : null;
-    refreshAssign(i);
+    refreshSoon(i);
   });
   input.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
@@ -350,6 +431,24 @@ function pageRow(i) {
     input,
     el("div", { class: "row-foot" }, exclude));
 }
+
+// พิมพ์ทีละตัวไม่ต้องอัปเดตทุกแถวทันที (ไฟล์หลายร้อยหน้าจะค้าง) รวบไว้อัปเดตครั้งเดียว
+let refreshTimer = 0;
+let refreshSkip = -1;
+function refreshSoon(skipInputIndex = -1) {
+  refreshSkip = skipInputIndex;
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => { refreshTimer = 0; refreshAssign(refreshSkip); }, 150);
+}
+
+function flushRefresh() {
+  if (!refreshTimer) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = 0;
+  refreshAssign(refreshSkip);
+}
+
+let optionKey = "";
 
 function refreshAssign(skipInputIndex = -1) {
   const eff = effective();
@@ -387,13 +486,18 @@ function refreshAssign(skipInputIndex = -1) {
   const assigned = eff.filter(Boolean).length;
   $("assign-count").textContent = `ระบุแล้ว ${assigned}/${eff.length} หน้า · ${order.size} แผนก`;
   $("assign-fill").style.width = `${eff.length ? (assigned / eff.length) * 100 : 0}%`;
-  const names = new Set([...DEPARTMENTS, ...loadCustomDepartments(), ...order.keys()]);
-  $("dept-options").replaceChildren(...[...names].map((n) => el("option", { value: n })));
+  const names = [...new Set([...DEPARTMENTS, ...loadCustomDepartments(), ...order.keys()])];
+  const key = names.join("\n");
+  if (key !== optionKey) {
+    optionKey = key;
+    $("dept-options").replaceChildren(...names.map((n) => el("option", { value: n })));
+  }
 }
 
 // ---------------------------------------------------------------- สร้างไฟล์
 
 async function buildOutputs() {
+  flushRefresh();
   $("split-error").hidden = true;
   const eff = effective();
   const missing = eff.map((v, i) => (v ? null : i + 1)).filter(Boolean);
@@ -414,6 +518,8 @@ async function buildOutputs() {
     const built = [];
     for (let k = 0; k < parts.length; k++) {
       const g = parts[k];
+      button.textContent = `กำลังสร้าง ${k + 1}/${parts.length}...`;
+      await nextFrame();
       const out = await PDFDocument.create({ updateMetadata: false });
       const copied = await out.copyPages(src, g.pages);
       copied.forEach((p) => out.addPage(p));
@@ -595,6 +701,10 @@ async function resetAll(ask) {
 
 $("file-input").addEventListener("change", (e) => openFile(e.target.files[0]));
 $("btn-split").addEventListener("click", buildOutputs);
+$("btn-skip").addEventListener("click", () => {
+  skipAuto = true;
+  $("loading-text").textContent = "ข้ามการจัดกลุ่มอัตโนมัติ...";
+});
 $("btn-edit").addEventListener("click", () => { showStep(2); observeThumbnails(); });
 $("btn-zip").addEventListener("click", saveZip);
 $("btn-share-all").addEventListener("click", shareAll);

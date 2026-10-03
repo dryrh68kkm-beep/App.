@@ -88,6 +88,7 @@ main { max-width: 760px; margin: 0 auto; padding: 8px 20px 32px; }
 .dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .dropzone strong { font-size: 16px; }
 .loading { display: flex; align-items: center; gap: 12px; margin-top: 16px; color: var(--text2); }
+.btn.skip { margin-top: 12px; width: 100%; }
 .spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--blue-soft); border-top-color: var(--blue); animation: spin 800ms linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -121,6 +122,8 @@ main { max-width: 760px; margin: 0 auto; padding: 8px 20px 32px; }
 .page-row {
   background: var(--card); border: 1px solid var(--border); border-left: 6px solid var(--border);
   border-radius: 16px; padding: 10px 12px; display: grid; gap: 8px;
+  /* ไฟล์หลายร้อยหน้า: ไม่จัดวางแถวที่อยู่นอกจอ ให้เลื่อนลื่นและไม่ค้าง */
+  content-visibility: auto; contain-intrinsic-size: auto 190px;
 }
 .page-row.starts { box-shadow: 0 6px 18px rgba(20, 40, 58, 0.08); margin-top: 8px; }
 .page-row.unassigned { border-left-color: var(--warning); background: #FFFCF6; }

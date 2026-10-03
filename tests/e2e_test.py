@@ -150,7 +150,8 @@ def run_auto_group(browser):
         assert "ระบุแล้ว 0/5" in page.inner_text("#assign-count"), "ข้อมูลจำลองต้องไม่ถูกเดาชื่อจากลายเส้นที่รู้จัก"
         for k, name in enumerate(names):
             page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
-        assert "ระบุแล้ว 5/5" in page.inner_text("#assign-count")
+        # แอปรวบการอัปเดตตอนพิมพ์ไว้ครู่หนึ่ง (กันค้างกับไฟล์หลายร้อยหน้า)
+        page.wait_for_selector('#assign-count:has-text("ระบุแล้ว 5/5")', timeout=5000)
         page.click("#btn-split")
         page.wait_for_selector("#step-result:not([hidden])")
         page.click("#btn-new")
