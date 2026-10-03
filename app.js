@@ -128,6 +128,12 @@ function goodGrouping(sigs, memory) {
   return k === 1 && present.some((sig) => recall(sig, memory)); // ไฟล์มีแผนกเดียวที่รู้จัก
 }
 
+/** ข้อความและแถบความคืบหน้าตอนโหลด (done = 0-1) */
+function setLoading(text, done) {
+  if ($("loading-text").textContent !== text) $("loading-text").textContent = text;
+  if (done !== undefined) $("load-fill").style.width = `${Math.round(Math.min(1, done) * 100)}%`;
+}
+
 async function pageWork(i, fn) {
   const page = await pdfDoc.getPage(i + 1);
   return withTimeout(fn(page).catch(() => null), PAGE_TIMEOUT);
@@ -137,7 +143,7 @@ async function autoGroup() {
   // เทียบภาพช่องชื่อหน่วยงานของทุกหน้า แล้วใส่แผนกที่หน้าแรกของแต่ละกลุ่ม
   const memory = loadMemory();
   const sample = sampleIndexes(total);
-  const status = (text) => { $("loading-text").textContent = text; };
+  const status = (text, done) => setLoading(text, done);
 
   // 1) ลองกรอบที่รู้จัก (รายงานแบบสแกน A4) ก่อน
   let sigOf = (page) => pageSignature(page, DEPT_BOX);
@@ -145,7 +151,7 @@ async function autoGroup() {
   const fixed = [];
   for (const i of sample) {
     if (skipAuto) return;
-    status(`กำลังหาช่องชื่อหน่วยงาน ${fixed.length + 1}/${sample.length}...`);
+    status("กำลังหาช่องชื่อหน่วยงาน", 0.3 + 0.1 * (fixed.length / sample.length));
     fixed.push(await pageWork(i, sigOf));
     await nextFrame();
   }
@@ -157,7 +163,7 @@ async function autoGroup() {
     const pixels = [];
     for (const i of sample) {
       if (skipAuto) return;
-      status(`กำลังหาช่องชื่อหน่วยงาน (รูปแบบใหม่) ${pixels.length + 1}/${sample.length}...`);
+      status("กำลังหาช่องชื่อหน่วยงาน", 0.4 + 0.1 * (pixels.length / sample.length));
       pixels.push(await pageWork(i, (page) => renderPixels(page, SEARCH_BOX, 480)));
       await nextFrame();
     }
@@ -181,7 +187,7 @@ async function autoGroup() {
   // 3) ทุกหน้า
   for (let i = sigs.length; i < total; i++) {
     if (skipAuto) return;
-    status(`กำลังจัดกลุ่มแผนกจากภาพ ${i + 1}/${total}...`);
+    status("กำลังจัดแผนก", 0.5 + 0.5 * (i / total));
     sigs.push(await pageWork(i, sigOf));
     if (i % 2 === 1) await nextFrame();
   }
@@ -240,7 +246,7 @@ async function openFile(file) {
     $("btn-skip").hidden = false;
     let prev = null;
     for (let i = 0; i < total && !skipAuto; i++) {
-      $("loading-text").textContent = `กำลังดูข้อความในไฟล์ ${i + 1}/${total}...`;
+      setLoading("กำลังอ่านไฟล์", 0.3 * (i / total));
       const s = await pageWork(i, suggestDepartment);
       if (s && s !== prev) { explicit[i] = s; origin[i] = "file"; }
       if (s) prev = s;
@@ -258,7 +264,7 @@ async function openFile(file) {
   } finally {
     $("loading").hidden = true;
     $("btn-skip").hidden = true;
-    $("loading-text").textContent = "กำลังเปิดไฟล์...";
+    setLoading("กำลังเปิดไฟล์", 0);
     $("dropzone").hidden = false;
     $("file-input").value = "";
   }
@@ -703,7 +709,7 @@ $("file-input").addEventListener("change", (e) => openFile(e.target.files[0]));
 $("btn-split").addEventListener("click", buildOutputs);
 $("btn-skip").addEventListener("click", () => {
   skipAuto = true;
-  $("loading-text").textContent = "ข้ามการจัดกลุ่มอัตโนมัติ...";
+  setLoading("ข้ามการจัดกลุ่มอัตโนมัติ");
 });
 $("btn-edit").addEventListener("click", () => { showStep(2); observeThumbnails(); });
 $("btn-zip").addEventListener("click", saveZip);
