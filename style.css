@@ -87,10 +87,36 @@ main { max-width: 760px; margin: 0 auto; padding: 8px 20px 32px; }
 .dropzone:active { background: var(--blue-soft); border-color: var(--blue); }
 .dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .dropzone strong { font-size: 16px; }
-.loading { display: flex; align-items: center; gap: 12px; margin-top: 16px; color: var(--text2); }
+.loading { display: grid; justify-items: center; gap: 12px; margin-top: 18px; color: var(--text2); text-align: center; }
 .btn.skip { margin-top: 12px; width: 100%; }
-.spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--blue-soft); border-top-color: var(--blue); animation: spin 800ms linear infinite; flex: none; }
-@keyframes spin { to { transform: rotate(360deg); } }
+
+/* แอนิเมชันโหลด: แผ่นเอกสารลอยลงแฟ้มแผนกสามสี */
+.sorter { position: relative; width: 150px; height: 84px; }
+.paper {
+  position: absolute; left: 63px; top: 0; width: 24px; height: 30px; border-radius: 4px;
+  background: #fff; border: 2px solid var(--blue);
+  background-image: linear-gradient(var(--blue-soft) 2px, transparent 2px);
+  background-size: 14px 6px; background-position: 3px 5px; background-repeat: repeat-y;
+  opacity: 0; animation: drop-1 2.4s ease-in-out infinite;
+}
+.paper:nth-child(2) { border-color: var(--teal); animation-name: drop-2; animation-delay: 0.8s; }
+.paper:nth-child(3) { border-color: #7B6CD9; animation-name: drop-3; animation-delay: 1.6s; }
+.folder {
+  position: absolute; bottom: 0; width: 38px; height: 26px; border-radius: 4px 8px 8px 8px;
+  animation: bump 2.4s ease-in-out infinite;
+}
+.folder::before { content: ""; position: absolute; left: 0; top: -6px; width: 16px; height: 8px; border-radius: 4px 4px 0 0; background: inherit; }
+.folder.f1 { left: 6px; background: var(--blue); }
+.folder.f2 { left: 56px; background: var(--teal); animation-delay: 0.8s; }
+.folder.f3 { left: 106px; background: #7B6CD9; animation-delay: 1.6s; }
+@keyframes drop-1 { 0% { opacity: 0; transform: translate(0, -6px) rotate(0); } 15% { opacity: 1; } 55% { opacity: 1; transform: translate(-50px, 40px) rotate(-14deg) scale(0.8); } 65%, 100% { opacity: 0; transform: translate(-50px, 50px) rotate(-14deg) scale(0.6); } }
+@keyframes drop-2 { 0% { opacity: 0; transform: translate(0, -6px); } 15% { opacity: 1; } 55% { opacity: 1; transform: translate(0, 40px) scale(0.8); } 65%, 100% { opacity: 0; transform: translate(0, 50px) scale(0.6); } }
+@keyframes drop-3 { 0% { opacity: 0; transform: translate(0, -6px) rotate(0); } 15% { opacity: 1; } 55% { opacity: 1; transform: translate(50px, 40px) rotate(14deg) scale(0.8); } 65%, 100% { opacity: 0; transform: translate(50px, 50px) rotate(14deg) scale(0.6); } }
+@keyframes bump { 0%, 50%, 75%, 100% { transform: translateY(0); } 62% { transform: translateY(3px); } }
+.loading-text { font-weight: 500; }
+.load-bar { width: 100%; max-width: 280px; height: 8px; border-radius: 99px; background: var(--blue-soft); overflow: hidden; }
+.load-fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--teal)); transition: width 300ms ease; }
+@media (prefers-reduced-motion: reduce) { .paper, .folder { animation: none; } .paper:nth-child(2) { opacity: 1; } }
 
 .error { margin: 14px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); font-weight: 500; }
 .notice { margin: 12px 0 0; padding: 10px 14px; border-radius: 12px; background: var(--warning-soft); color: var(--warning-text); font-size: 14px; }

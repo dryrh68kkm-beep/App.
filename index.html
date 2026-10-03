@@ -52,8 +52,12 @@
           <input id="file-input" type="file" accept="application/pdf,.pdf">
         </label>
         <div id="loading" class="loading" hidden>
-          <div class="spinner" aria-hidden="true"></div>
-          <span id="loading-text">กำลังเปิดไฟล์...</span>
+          <div class="sorter" aria-hidden="true">
+            <span class="paper"></span><span class="paper"></span><span class="paper"></span>
+            <span class="folder f1"></span><span class="folder f2"></span><span class="folder f3"></span>
+          </div>
+          <span id="loading-text" class="loading-text">กำลังเปิดไฟล์</span>
+          <div class="load-bar" role="progressbar" aria-label="ความคืบหน้า"><div id="load-fill" class="load-fill"></div></div>
         </div>
         <button id="btn-skip" class="btn secondary small skip" type="button" hidden>ข้าม แล้วเลือกแผนกเอง</button>
         <p id="upload-error" class="error" hidden></p>
