@@ -76,6 +76,12 @@ export const KNOWN_SIGNATURES = [
 ];
 
 // ใช้เฉพาะ PDF ที่มีข้อความ: อ่านชื่อแผนกจากส่วนบนของหน้าเพื่อเติมให้ล่วงหน้า (ไฟล์สแกนต้องเลือกเอง)
+// รวมหลายแผนกไว้ในไฟล์เดียว (เช่น หัวหน้าแผนกขอไฟล์เดียวที่มีน้องทุกคน)
+// ค่าเริ่มต้นเท่านั้น HR เปิด/ปิด/เพิ่ม/ลบได้ในแอป
+export const MERGE_RULES = [
+  { name: "FSH-Butchery&SeaFood", from: ["FSH-Butchery", "FSH-Seafood", "FSH-Butchery&SeaFood"] },
+];
+
 export const HEADER_AREA = 0.3;
 export const DEPARTMENT_PATTERNS = [
   /(?:ชื่อ)?(?:หน่วยงาน|แผนก|ฝ่าย)\s*[:：]?\s*(.+?)(?=\s{2,}|\s*(?:รหัส|ชื่อ|ตำแหน่ง|วันที่|ประจำ|หน้า|ระหว่าง)|$)/u,
