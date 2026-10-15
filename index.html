@@ -84,6 +84,21 @@
         <ol id="auto-list" class="auto-list"></ol>
       </div>
 
+      <div id="merge-card" class="card merge">
+        <h3>รวมหลายแผนกเป็นไฟล์เดียว</h3>
+        <p class="helper">เช่น หัวหน้าแผนกขอไฟล์เดียวที่มีน้องทุกคน ติ๊กออกถ้าต้องการไฟล์แยกตามแผนก</p>
+        <ul id="merge-list" class="merge-list"></ul>
+        <details id="merge-add" class="merge-add">
+          <summary>+ เพิ่มการรวมไฟล์</summary>
+          <input id="merge-name" class="dept-input" type="text" list="dept-options" autocomplete="off"
+            autocapitalize="off" spellcheck="false" placeholder="ชื่อไฟล์รวม เช่น FSH-Bakery&amp;Delica" aria-label="ชื่อไฟล์รวม">
+          <p class="helper">เลือกแผนกที่จะรวม (อย่างน้อย 2)</p>
+          <div id="merge-pick" class="merge-pick"></div>
+          <button id="merge-save" class="btn secondary small" type="button">เพิ่ม</button>
+          <p id="merge-error" class="error" hidden></p>
+        </details>
+      </div>
+
       <h3 class="list-title">ตรวจ / แก้ทีละหน้า</h3>
       <div class="card tip">
         ถ้าต้องแก้ ให้เลือกแผนกที่<b>หน้าแรกของแต่ละแผนก</b> หน้าถัดไปจะใช้แผนกเดียวกันจนกว่าจะเปลี่ยน · แตะภาพเพื่อดูทั้งหน้า

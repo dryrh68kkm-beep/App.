@@ -3,12 +3,12 @@
 // ไฟล์ PDF อยู่ในหน่วยความจำเท่านั้น และถูกลบเมื่อกดล้างข้อมูลหรือปิดแอป
 
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
-import { DEPARTMENTS, DEPT_BOX, HEADER_BOX, KNOWN_SIGNATURES } from "./config.js";
+import { DEPARTMENTS, DEPT_BOX, HEADER_BOX, KNOWN_SIGNATURES, MERGE_RULES } from "./config.js";
 import { suggestDepartment } from "./detect.js";
 import {
   SEARCH_BOX, bandSignature, cluster, decode, encode, findBands, pageSignature, recall, renderPixels,
 } from "./signature.js";
-import { REVIEW_NAME, pagesLabel, split, uniqueFilenames } from "./splitter.js";
+import { REVIEW_NAME, cleanName, pagesLabel, split, uniqueFilenames } from "./splitter.js";
 import { makeZip } from "./zip.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdf.worker.min.mjs", import.meta.url).href;
@@ -18,6 +18,7 @@ const EXCLUDED = "\u0000excluded"; // หน้าที่ HR เลือก "
 const STRIPES = 6;
 const CUSTOM_KEY = "deptflow.customDepartments"; // เก็บเฉพาะชื่อแผนกที่พิมพ์เพิ่ม ไม่มีข้อมูลพนักงาน
 const MEMORY_KEY = "deptflow.deptSignatures";    // ลายเส้นภาพชื่อหน่วยงาน → ชื่อแผนก (ไม่มีข้อมูลพนักงาน)
+const MERGE_KEY = "deptflow.mergeRules";        // กติการวมแผนกเป็นไฟล์เดียว (ชื่อแผนกเท่านั้น)
 const CLUSTER = "\u0000cluster:";                 // หน้านี้เริ่มกลุ่มที่แอปจัดให้ (ชื่อมาจากกลุ่ม)
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -112,6 +113,86 @@ function learnGroups() {
     saved.push({ name, sig });
   }
   try { localStorage.setItem(MEMORY_KEY, JSON.stringify(saved.slice(-200))); } catch { /* ไม่เป็นไร */ }
+}
+
+// ---------------------------------------------------------------- รวมแผนกเป็นไฟล์เดียว
+
+const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+function loadMergeRules() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MERGE_KEY));
+    if (Array.isArray(saved)) {
+      return saved.filter((r) => r && typeof r.name === "string" && Array.isArray(r.from))
+        .map((r) => ({ name: r.name, from: r.from.filter((f) => typeof f === "string"), on: r.on !== false }));
+    }
+  } catch { /* ใช้ค่าเริ่มต้น */ }
+  return MERGE_RULES.map((r) => ({ name: r.name, from: [...r.from], on: true }));
+}
+
+function saveMergeRules(rules) {
+  try { localStorage.setItem(MERGE_KEY, JSON.stringify(rules)); } catch { /* ไม่เป็นไร */ }
+}
+
+/** ชื่อไฟล์ที่หน้านี้จะไปอยู่ (ถ้าแผนกนี้อยู่ในกติการวมที่เปิดอยู่) */
+function mergedName(dept, rules) {
+  if (!dept) return dept;
+  const rule = rules.find((r) => r.on && r.from.some((f) => sameName(f, dept)));
+  return rule ? rule.name : dept;
+}
+
+function renderMerge() {
+  const rules = loadMergeRules();
+  const eff = effective();
+  $("merge-list").replaceChildren(...rules.map((r, k) => {
+    const pages = eff.filter((v) => v && r.from.some((f) => sameName(f, v))).length;
+    const box = el("input", { type: "checkbox" });
+    box.checked = r.on;
+    box.addEventListener("change", () => {
+      rules[k].on = box.checked;
+      saveMergeRules(rules);
+    });
+    const remove = el("button", { class: "btn ghost", type: "button", text: "ลบ", "aria-label": `ลบการรวม ${r.name}` });
+    remove.addEventListener("click", () => {
+      if (!confirm(`ลบการรวมไฟล์ "${r.name}"?`)) return;
+      rules.splice(k, 1);
+      saveMergeRules(rules);
+      renderMerge();
+    });
+    return el("li", { class: "merge-row" },
+      el("label", { class: "check" }, box,
+        el("span", {},
+          el("b", { text: r.name }),
+          el("small", { text: `รวม ${r.from.join(" + ")}${total ? ` · ไฟล์นี้ ${pages} หน้า` : ""}` }))),
+      remove);
+  }));
+}
+
+function renderMergePick() {
+  const inFile = [...new Set(effective().filter(Boolean))];
+  const names = [...new Set([...inFile, ...DEPARTMENTS, ...loadCustomDepartments()])];
+  $("merge-pick").replaceChildren(...names.map((n) => {
+    const box = el("input", { type: "checkbox", value: n });
+    return el("label", { class: `check pick${inFile.includes(n) ? " in-file" : ""}` }, box, el("span", { text: n }));
+  }));
+}
+
+function addMergeRule() {
+  const name = cleanName($("merge-name").value);
+  const from = [...$("merge-pick").querySelectorAll("input:checked")].map((b) => b.value);
+  const fail = (msg) => showError("merge-error", msg);
+  if (!name) return fail("กรุณาใส่ชื่อไฟล์รวม");
+  if (name === REVIEW_NAME) return fail(`ห้ามใช้ชื่อ "${REVIEW_NAME}"`);
+  if (from.length < 2) return fail("เลือกแผนกที่จะรวมอย่างน้อย 2 แผนก");
+  const rules = loadMergeRules();
+  const taken = from.find((f) => rules.some((r) => r.on && r.from.some((x) => sameName(x, f))));
+  if (taken) return fail(`แผนก ${taken} อยู่ในการรวมอื่นแล้ว ติ๊กออกหรือลบอันเดิมก่อน`);
+  rules.push({ name, from, on: true });
+  saveMergeRules(rules);
+  $("merge-error").hidden = true;
+  $("merge-name").value = "";
+  $("merge-add").open = false;
+  renderMerge();
 }
 
 function sampleIndexes(n, max = 30) {
@@ -489,6 +570,7 @@ function refreshAssign(skipInputIndex = -1) {
     else { tag.textContent = "ยังไม่ระบุ"; tag.classList.add("warn"); }
   });
 
+  renderMerge();
   const assigned = eff.filter(Boolean).length;
   $("assign-count").textContent = `ระบุแล้ว ${assigned}/${eff.length} หน้า · ${order.size} แผนก`;
   $("assign-fill").style.width = `${eff.length ? (assigned / eff.length) * 100 : 0}%`;
@@ -517,7 +599,9 @@ async function buildOutputs() {
   button.disabled = true;
   button.textContent = "กำลังสร้าง...";
   try {
-    const parts = split(eff, total);
+    const rules = loadMergeRules();
+    const parts = split(eff.map((v) => mergedName(v, rules)), total)
+      .map((g) => ({ ...g, members: [...new Set(g.pages.map((p) => eff[p]).filter(Boolean))] }));
     const filenames = uniqueFilenames(parts.map((g) => g.name));
     const { PDFDocument } = window.PDFLib;
     const src = await PDFDocument.load(srcBytes, { updateMetadata: false });
@@ -598,7 +682,8 @@ function renderResult() {
         el("div", { class: `icon-box ${o.review ? "warn" : "blue"}`, text: o.review ? "!" : String(k + 1) }),
         el("div", { class: "grow" },
           el("h3", { text: o.name }),
-          el("p", { class: "helper", text: `${o.pages.length} หน้า · หน้า ${pagesLabel(pages)} ในไฟล์เดิม` }))),
+          el("p", { class: "helper", text: `${o.pages.length} หน้า · หน้า ${pagesLabel(pages)} ในไฟล์เดิม` }),
+          o.members?.length > 1 ? el("p", { class: "helper merged", text: `รวม ${o.members.join(" + ")}` }) : null)),
       o.review ? el("p", { class: "notice", text: "หน้าที่ยังไม่ระบุแผนก แอปไม่เดาให้ กรุณาตรวจและจัดการเอง" }) : null,
       el("div", { class: "row-actions" }, ...buttons));
   }));
@@ -707,6 +792,8 @@ async function resetAll(ask) {
 
 $("file-input").addEventListener("change", (e) => openFile(e.target.files[0]));
 $("btn-split").addEventListener("click", buildOutputs);
+$("merge-save").addEventListener("click", addMergeRule);
+$("merge-add").addEventListener("toggle", () => { if ($("merge-add").open) renderMergePick(); });
 $("btn-skip").addEventListener("click", () => {
   skipAuto = true;
   setLoading("ข้ามการจัดกลุ่มอัตโนมัติ");

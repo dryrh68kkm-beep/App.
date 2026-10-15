@@ -192,6 +192,19 @@ canvas.thumb.ready { aspect-ratio: auto; background: #fff; }
 
 .card.auto { border-color: #BFE3F5; }
 .auto-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 12px; }
+.card.merge { border-color: #BFEDE9; }
+.merge-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.merge-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--teal-soft); }
+.merge-row .check { margin: 0; padding: 0; background: none; border: 0; }
+.merge-row b, .merge-row small { display: block; overflow-wrap: anywhere; }
+.merge-row small { color: var(--text2); font-size: 13px; margin-top: 2px; }
+.merge-add { margin-top: 12px; }
+.merge-add summary { cursor: pointer; color: var(--teal-strong); font-weight: 600; padding: 6px 0; }
+.merge-add[open] { display: grid; gap: 10px; }
+.merge-pick { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: 12px; }
+.merge-pick .check { margin: 0; padding: 6px 8px; }
+.merge-pick .check.in-file span { font-weight: 600; }
+.helper.merged { color: var(--teal-strong); font-weight: 500; }
 .auto-row { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--input); }
 canvas.dept-crop { display: block; width: 100%; aspect-ratio: 131 / 12; background: #fff; }
 .list-title { margin: 22px 0 10px; font-size: 17px; }

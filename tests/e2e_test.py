@@ -28,7 +28,7 @@ import pymupdf
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fake_pdf import make_report_pdf, report_pages, scanned_sample, text_sample  # noqa: E402
+from fake_pdf import FakeReport, make_report_pdf, report_pages, scanned_sample, text_sample  # noqa: E402
 
 URL = os.environ.get("DEPTFLOW_URL", "http://127.0.0.1:8800/")
 CHROMIUM = os.environ.get("CHROMIUM_PATH")  # ถ้าต้องการระบุเบราว์เซอร์เอง
@@ -177,7 +177,7 @@ def run_share_all(browser):
         page.goto(URL)
         page.set_input_files("#file-input", str(path))
         page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "FSH-Seafood"]):
+        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "FSH-Delica"]):
             page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
         page.click("#btn-split")
         page.wait_for_selector("#step-result:not([hidden])")
@@ -193,7 +193,7 @@ def run_share_all(browser):
         calls = page.locator("body").evaluate("() => window.__calls")
         ctx.close()
     assert calls == 1, calls
-    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "FSH-Seafood.pdf"], shared
+    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "FSH-Delica.pdf"], shared
     src = pymupdf.open(stream=data, filetype="pdf")
     out = []
     for s in shared:
@@ -201,6 +201,62 @@ def run_share_all(browser):
         out += [fingerprint(d, pg) for pg in d]
     assert sorted(out) == sorted(fingerprint(src, pg) for pg in src)
     print("✓ แชร์ทุกไฟล์ครั้งเดียว (3 PDF ในการแชร์ครั้งเดียว)")
+
+
+def run_merge(browser):
+    """รวมหลายแผนกเป็นไฟล์เดียว: ค่าเริ่มต้น Butchery + Seafood + Butchery&SeaFood, ปิดได้ และเพิ่มเองได้"""
+    code = "010-200-999-{}-000-000"
+    data = make_report_pdf([
+        FakeReport("9900001", "DEMO01:FSH-Butchery", code.format("020-010"), page_no=1),
+        FakeReport("9900002", "DEMO01:FSH-Produce", code.format("020-030"), page_no=2),
+        FakeReport("9900003", "DEMO01:FSH-Seafood", code.format("020-020"), page_no=3),
+        FakeReport("9900004", "DEMO01:FSH-Butchery&SeaFood", code.format("020-040"), page_no=4),
+        FakeReport("9900005", "DEMO01:FSH-Delica", code.format("020-050"), page_no=5),
+    ])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "merge.pdf"
+        path.write_bytes(data)
+        ctx = browser.new_context(viewport={"width": 390, "height": 844})
+        page = ctx.new_page()
+        page.goto(URL)
+
+        def build():
+            page.set_input_files("#file-input", str(path))
+            page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+            page.click("#btn-split")
+            page.wait_for_selector("#step-result:not([hidden])")
+            result = {h.inner_text(): page.inner_text(f'#group-list article[data-k="{k}"] .helper')
+                      for k, h in enumerate(page.locator("#group-list h3").all())}
+            page.click("#btn-new")
+            return result
+
+        got = build()
+        assert list(got) == ["FSH-Butchery&SeaFood", "FSH-Produce", "FSH-Delica"], got
+        assert got["FSH-Butchery&SeaFood"].startswith("3 หน้า · หน้า 1, 3-4"), got
+
+        # ติ๊กออก = ไฟล์แยกตามแผนกเหมือนเดิม
+        page.set_input_files("#file-input", str(path))
+        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+        assert "ไฟล์นี้ 3 หน้า" in page.inner_text("#merge-list")
+        page.uncheck("#merge-list input[type=checkbox]")
+        page.click("#btn-new-2")
+        got = build()
+        assert list(got) == ["FSH-Butchery", "FSH-Produce", "FSH-Seafood", "FSH-Butchery&SeaFood", "FSH-Delica"], got
+
+        # เพิ่มการรวมเอง
+        page.set_input_files("#file-input", str(path))
+        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
+        page.click("#merge-add summary")
+        page.fill("#merge-name", "FF-Team")
+        page.check('#merge-pick input[value="FSH-Produce"]')
+        page.check('#merge-pick input[value="FSH-Delica"]')
+        page.click("#merge-save")
+        assert page.locator("#merge-list li").count() == 2
+        page.click("#btn-new-2")
+        got = build()
+        assert list(got)[:2] == ["FSH-Butchery", "FF-Team"] and len(got) == 4, got
+        ctx.close()
+    print("✓ รวมหลายแผนกเป็นไฟล์เดียว")
 
 
 def main():
@@ -213,6 +269,7 @@ def main():
         run_case(browser, "text", data, {}, ["แผนกจำลอง ก", "แผนกจำลอง ข", "แผนกจำลอง ค"])
         run_auto_group(browser)
         run_share_all(browser)
+        run_merge(browser)
         run_zip_and_offline(browser)
         browser.close()
     print("ผ่านทั้งหมด")
