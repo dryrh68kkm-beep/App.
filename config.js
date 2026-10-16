@@ -81,6 +81,7 @@ export const KNOWN_SIGNATURES = [
 export const MERGE_RULES = [
   { name: "FSH-Butchery&SeaFood", from: ["FSH-Butchery", "FSH-Seafood", "FSH-Butchery&SeaFood"] },
   { name: "FSH-Bakery&Delica", from: ["FSH-Bakery", "FSH-Delica", "FSH-Bakery&Delica"] },
+  { name: "SPR-Inventory", from: ["SPR-Inventory", "SPR-INV-Inventory"] },
 ];
 
 export const HEADER_AREA = 0.3;
