@@ -80,6 +80,7 @@ export const KNOWN_SIGNATURES = [
 // ค่าเริ่มต้นเท่านั้น HR เปิด/ปิด/เพิ่ม/ลบได้ในแอป
 export const MERGE_RULES = [
   { name: "FSH-Butchery&SeaFood", from: ["FSH-Butchery", "FSH-Seafood", "FSH-Butchery&SeaFood"] },
+  { name: "FSH-Bakery&Delica", from: ["FSH-Bakery", "FSH-Delica", "FSH-Bakery&Delica"] },
 ];
 
 export const HEADER_AREA = 0.3;

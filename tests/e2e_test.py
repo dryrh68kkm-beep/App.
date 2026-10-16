@@ -177,7 +177,7 @@ def run_share_all(browser):
         page.goto(URL)
         page.set_input_files("#file-input", str(path))
         page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "FSH-Delica"]):
+        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "DRY-Snack"]):
             page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
         page.click("#btn-split")
         page.wait_for_selector("#step-result:not([hidden])")
@@ -193,7 +193,7 @@ def run_share_all(browser):
         calls = page.locator("body").evaluate("() => window.__calls")
         ctx.close()
     assert calls == 1, calls
-    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "FSH-Delica.pdf"], shared
+    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "DRY-Snack.pdf"], [s["name"] for s in shared]
     src = pymupdf.open(stream=data, filetype="pdf")
     out = []
     for s in shared:
@@ -231,14 +231,15 @@ def run_merge(browser):
             return result
 
         got = build()
-        assert list(got) == ["FSH-Butchery&SeaFood", "FSH-Produce", "FSH-Delica"], got
+        assert list(got) == ["FSH-Butchery&SeaFood", "FSH-Produce", "FSH-Bakery&Delica"], got
         assert got["FSH-Butchery&SeaFood"].startswith("3 หน้า · หน้า 1, 3-4"), got
 
         # ติ๊กออก = ไฟล์แยกตามแผนกเหมือนเดิม
         page.set_input_files("#file-input", str(path))
         page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
         assert "ไฟล์นี้ 3 หน้า" in page.inner_text("#merge-list")
-        page.uncheck("#merge-list input[type=checkbox]")
+        for box in page.locator("#merge-list input[type=checkbox]").all():
+            box.uncheck()
         page.click("#btn-new-2")
         got = build()
         assert list(got) == ["FSH-Butchery", "FSH-Produce", "FSH-Seafood", "FSH-Butchery&SeaFood", "FSH-Delica"], got
@@ -251,7 +252,7 @@ def run_merge(browser):
         page.check('#merge-pick input[value="FSH-Produce"]')
         page.check('#merge-pick input[value="FSH-Delica"]')
         page.click("#merge-save")
-        assert page.locator("#merge-list li").count() == 2
+        assert page.locator("#merge-list li").count() == 3
         page.click("#btn-new-2")
         got = build()
         assert list(got)[:2] == ["FSH-Butchery", "FF-Team"] and len(got) == 4, got
