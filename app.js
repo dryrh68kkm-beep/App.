@@ -18,7 +18,8 @@ const EXCLUDED = "\u0000excluded"; // หน้าที่ HR เลือก "
 const STRIPES = 6;
 const CUSTOM_KEY = "deptflow.customDepartments"; // เก็บเฉพาะชื่อแผนกที่พิมพ์เพิ่ม ไม่มีข้อมูลพนักงาน
 const MEMORY_KEY = "deptflow.deptSignatures";    // ลายเส้นภาพชื่อหน่วยงาน → ชื่อแผนก (ไม่มีข้อมูลพนักงาน)
-const MERGE_KEY = "deptflow.mergeRules";        // กติการวมแผนกเป็นไฟล์เดียว (ชื่อแผนกเท่านั้น)
+const MERGE_KEY = "deptflow.mergeRules";
+const MERGE_SEEN_KEY = "deptflow.mergeDefaultsSeen"; // ค่าเริ่มต้นที่เคยใส่ให้แล้ว (ลบแล้วไม่ใส่กลับ)        // กติการวมแผนกเป็นไฟล์เดียว (ชื่อแผนกเท่านั้น)
 const CLUSTER = "\u0000cluster:";                 // หน้านี้เริ่มกลุ่มที่แอปจัดให้ (ชื่อมาจากกลุ่ม)
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -120,18 +121,31 @@ function learnGroups() {
 const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
 
 function loadMergeRules() {
+  const defaults = MERGE_RULES.map((r) => ({ name: r.name, from: [...r.from], on: true }));
+  let saved = null;
+  let seen = null;
   try {
-    const saved = JSON.parse(localStorage.getItem(MERGE_KEY));
-    if (Array.isArray(saved)) {
-      return saved.filter((r) => r && typeof r.name === "string" && Array.isArray(r.from))
-        .map((r) => ({ name: r.name, from: r.from.filter((f) => typeof f === "string"), on: r.on !== false }));
-    }
+    saved = JSON.parse(localStorage.getItem(MERGE_KEY));
+    seen = JSON.parse(localStorage.getItem(MERGE_SEEN_KEY));
   } catch { /* ใช้ค่าเริ่มต้น */ }
-  return MERGE_RULES.map((r) => ({ name: r.name, from: [...r.from], on: true }));
+  if (!Array.isArray(saved)) return defaults;
+  const rules = saved.filter((r) => r && typeof r.name === "string" && Array.isArray(r.from))
+    .map((r) => ({ name: r.name, from: r.from.filter((f) => typeof f === "string"), on: r.on !== false }));
+  // ค่าเริ่มต้นที่เพิ่มมาใหม่ในรุ่นหลัง ใส่ให้ครั้งเดียว (รุ่นแรกมีแค่ FSH-Butchery&SeaFood)
+  if (!Array.isArray(seen)) seen = ["FSH-Butchery&SeaFood"];
+  for (const d of defaults) {
+    if (seen.includes(d.name) || rules.some((r) => sameName(r.name, d.name))) continue;
+    if (d.from.some((f) => rules.some((r) => r.on && r.from.some((x) => sameName(x, f))))) d.on = false;
+    rules.push(d);
+  }
+  return rules;
 }
 
 function saveMergeRules(rules) {
-  try { localStorage.setItem(MERGE_KEY, JSON.stringify(rules)); } catch { /* ไม่เป็นไร */ }
+  try {
+    localStorage.setItem(MERGE_KEY, JSON.stringify(rules));
+    localStorage.setItem(MERGE_SEEN_KEY, JSON.stringify(MERGE_RULES.map((r) => r.name)));
+  } catch { /* ไม่เป็นไร */ }
 }
 
 /** ชื่อไฟล์ที่หน้านี้จะไปอยู่ (ถ้าแผนกนี้อยู่ในกติการวมที่เปิดอยู่) */
