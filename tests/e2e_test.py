@@ -252,7 +252,7 @@ def run_merge(browser):
         page.check('#merge-pick input[value="FSH-Produce"]')
         page.check('#merge-pick input[value="FSH-Delica"]')
         page.click("#merge-save")
-        assert page.locator("#merge-list li").count() == 4
+        assert page.locator("#merge-list li").count() == 5
         page.click("#btn-new-2")
         got = build()
         assert list(got)[:2] == ["FSH-Butchery", "FF-Team"] and len(got) == 4, got
