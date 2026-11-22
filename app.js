@@ -1,46 +1,53 @@
-// DeptFlow (มือถือ) — ทำงานในเบราว์เซอร์ของเครื่องนี้ทั้งหมด
-// ไม่มีการส่งเอกสารออกนอกเครื่อง ไม่มี analytics ไม่ใช้ OCR
-// ไฟล์ PDF อยู่ในหน่วยความจำเท่านั้น และถูกลบเมื่อกดล้างข้อมูลหรือปิดแอป
-
-import * as pdfjsLib from "./vendor/pdf.min.mjs";
-import { DEPARTMENTS, DEPT_BOX, HEADER_BOX, KNOWN_SIGNATURES, MERGE_RULES } from "./config.js";
-import { suggestDepartment } from "./detect.js";
-import {
-  SEARCH_BOX, bandSignature, cluster, decode, encode, findBands, pageSignature, recall, renderPixels,
-} from "./signature.js";
-import { REVIEW_NAME, cleanName, pagesLabel, split, uniqueFilenames } from "./splitter.js";
-import { makeZip } from "./zip.js";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdf.worker.min.mjs", import.meta.url).href;
+// รายรับรายจ่ายครอบครัว — บันทึกในเครื่องก่อนเสมอ แล้วซิงก์กับ Cloudflare Worker ของครอบครัว
+// ใช้ได้แม้ไม่มีเน็ต รายการที่ยังส่งไม่ได้จะส่งเองเมื่อกลับมาออนไลน์
 
 const $ = (id) => document.getElementById(id);
-const EXCLUDED = "\u0000excluded"; // หน้าที่ HR เลือก "ยกเว้น" ไปอยู่กลุ่มรอตรวจสอบ
-const STRIPES = 6;
-const CUSTOM_KEY = "deptflow.customDepartments"; // เก็บเฉพาะชื่อแผนกที่พิมพ์เพิ่ม ไม่มีข้อมูลพนักงาน
-const MEMORY_KEY = "deptflow.deptSignatures";    // ลายเส้นภาพชื่อหน่วยงาน → ชื่อแผนก (ไม่มีข้อมูลพนักงาน)
-const MERGE_KEY = "deptflow.mergeRules";
-const MERGE_SEEN_KEY = "deptflow.mergeDefaultsSeen"; // ค่าเริ่มต้นที่เคยใส่ให้แล้ว (ลบแล้วไม่ใส่กลับ)        // กติการวมแผนกเป็นไฟล์เดียว (ชื่อแผนกเท่านั้น)
-const CLUSTER = "\u0000cluster:";                 // หน้านี้เริ่มกลุ่มที่แอปจัดให้ (ชื่อมาจากกลุ่ม)
-const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const KEY = { tx: "money.tx", pending: "money.pending", cfg: "money.cfg", pull: "money.lastPull", cats: "money.cats" };
+const DEFAULT_CATS = {
+  expense: ["อาหาร", "เดินทาง", "บ้าน/ค่าเช่า", "น้ำ-ไฟ-เน็ต", "ของใช้", "ลูก/การศึกษา", "สุขภาพ", "ผ่อน/หนี้", "ช้อปปิ้ง", "อื่น ๆ"],
+  income: ["เงินเดือน", "ค่าล่วงเวลา", "ขายของ", "โบนัส", "ดอกเบี้ย/ปันผล", "อื่น ๆ"],
+};
+const SYNC_EVERY = 60_000;
 
-let srcBytes = null;   // Uint8Array ของไฟล์ต้นฉบับ
-let pdfDoc = null;     // เอกสารของ pdf.js สำหรับแสดงภาพ
-let total = 0;
-let sourceName = "";
-let explicit = [];     // ชื่อแผนกที่กำหนดที่หน้านั้นโดยตรง (null = ใช้ตามหน้าก่อน)
-let origin = [];       // "file" = เติมจากข้อความในไฟล์, "user" = HR เลือกเอง
-let outputs = [];      // [{ name, filename, pages, file, review }]
-let groups = [];       // กลุ่มที่แอปจัดจากภาพชื่อหน่วยงาน: [{ sig, pages, name, source }]
-let deptBox = DEPT_BOX; // กรอบช่องชื่อหน่วยงานที่ใช้จริงกับไฟล์นี้ (ใช้แสดงภาพในกลุ่ม)
-let skipAuto = false;   // HR กด "ข้าม" ระหว่างจัดกลุ่ม
-const PAGE_TIMEOUT = 8000;
+// ---------------------------------------------------------------- เก็บข้อมูลในเครื่อง
 
-const nextFrame = () => new Promise((r) => setTimeout(r, 0)); // ให้หน้าจอได้อัปเดต ไม่ค้าง
-function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+function read(key, fallback) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key));
+    return v ?? fallback;
+  } catch { return fallback; }
 }
-let renderObserver = null;
+
+function write(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { toast("พื้นที่ในเครื่องเต็ม บันทึกไม่ได้"); }
+}
+
+const txs = new Map(read(KEY.tx, []).map((t) => [t.id, t]));
+const pending = new Set(read(KEY.pending, []));
+let cfg = read(KEY.cfg, { url: "", pass: "", member: "" });
+let customCats = read(KEY.cats, { expense: [], income: [] });
+
+function persist() {
+  write(KEY.tx, [...txs.values()]);
+  write(KEY.pending, [...pending]);
+}
+
+// ---------------------------------------------------------------- ตัวช่วย
+
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const today = () => ymd(new Date());
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`);
+const money = new Intl.NumberFormat("th-TH", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const baht = (satang) => money.format(satang / 100);
+
+/** "1,234.5" → 123450 (สตางค์) หรือ null ถ้าไม่ถูกต้อง */
+export function parseAmount(text) {
+  const v = String(text).replace(/[,\s฿]/g, "");
+  if (!/^\d+(\.\d{0,2})?$/.test(v)) return null;
+  const n = Math.round(parseFloat(v) * 100);
+  return n > 0 && n <= 1e13 ? n : null;
+}
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -54,786 +61,372 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-function showStep(n) {
-  $("step-upload").hidden = n !== 1;
-  $("step-assign").hidden = n !== 2;
-  $("step-result").hidden = n !== 3;
-  for (let i = 1; i <= 3; i++) $(`step-dot-${i}`).className = i === n ? "active" : i < n ? "done" : "";
-  document.body.classList.toggle("has-bottom-bar", n === 2);
-  window.scrollTo({ top: 0 });
+let toastTimer = 0;
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
 }
 
-function showError(id, msg) {
-  $(id).textContent = msg;
-  $(id).hidden = false;
+// ---------------------------------------------------------------- หน้าจอ
+
+let month = today().slice(0, 7);
+let view = "list";
+let catType = "expense";
+
+function monthItems() {
+  return [...txs.values()].filter((t) => !t.deleted && t.date.startsWith(month));
 }
 
-// ---------------------------------------------------------------- ชื่อแผนก
-
-function loadCustomDepartments() {
-  try {
-    const v = JSON.parse(localStorage.getItem(CUSTOM_KEY) || "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+function render() {
+  const [y, m] = month.split("-").map(Number);
+  $("month-label").textContent = new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric" }).format(new Date(y, m - 1, 1));
+  const items = monthItems();
+  const sum = (type) => items.filter((t) => t.type === type).reduce((s, t) => s + t.amount, 0);
+  const inc = sum("income"), exp = sum("expense");
+  $("sum-income").textContent = baht(inc);
+  $("sum-expense").textContent = baht(exp);
+  $("sum-balance").textContent = baht(inc - exp);
+  $("sum-balance").parentElement.classList.toggle("neg", inc - exp < 0);
+  $("view-list").hidden = view !== "list";
+  $("view-cats").hidden = view !== "cats";
+  if (view === "list") renderList(items);
+  else renderCats(items);
 }
 
-function rememberDepartments(names) {
-  const custom = new Set(loadCustomDepartments());
-  for (const n of names) if (n && !DEPARTMENTS.includes(n) && n !== REVIEW_NAME) custom.add(n);
-  try {
-    localStorage.setItem(CUSTOM_KEY, JSON.stringify([...custom].slice(-50)));
-  } catch { /* เบราว์เซอร์ไม่ให้เก็บ ไม่เป็นไร */ }
-}
-
-function loadMemory() {
-  let saved = [];
-  try {
-    saved = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]");
-    if (!Array.isArray(saved)) saved = [];
-  } catch { saved = []; }
-  return [...saved, ...KNOWN_SIGNATURES]
-    .filter((m) => m && typeof m.name === "string" && typeof m.sig === "string")
-    .map((m) => ({ name: m.name, sig: m.sig, bits: decode(m.sig) }));
-}
-
-function learnGroups() {
-  // จำลายเส้นของกลุ่มที่ทุกหน้าได้ชื่อแผนกเดียวกัน ครั้งหน้าจะใส่ชื่อให้เอง
-  const eff = effective();
-  let saved = [];
-  try { saved = JSON.parse(localStorage.getItem(MEMORY_KEY) || "[]"); } catch { saved = []; }
-  if (!Array.isArray(saved)) saved = [];
-  for (const g of groups) {
-    const names = new Set(g.pages.map((p) => eff[p]));
-    if (names.size !== 1) continue;
-    const [name] = names;
-    if (!name || name === REVIEW_NAME) continue;
-    const sig = encode(g.sig);
-    saved = saved.filter((m) => m.sig !== sig);
-    saved.push({ name, sig });
-  }
-  try { localStorage.setItem(MEMORY_KEY, JSON.stringify(saved.slice(-200))); } catch { /* ไม่เป็นไร */ }
-}
-
-// ---------------------------------------------------------------- รวมแผนกเป็นไฟล์เดียว
-
-const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
-
-function loadMergeRules() {
-  const defaults = MERGE_RULES.map((r) => ({ name: r.name, from: [...r.from], on: true }));
-  let saved = null;
-  let seen = null;
-  try {
-    saved = JSON.parse(localStorage.getItem(MERGE_KEY));
-    seen = JSON.parse(localStorage.getItem(MERGE_SEEN_KEY));
-  } catch { /* ใช้ค่าเริ่มต้น */ }
-  if (!Array.isArray(saved)) return defaults;
-  const rules = saved.filter((r) => r && typeof r.name === "string" && Array.isArray(r.from))
-    .map((r) => ({ name: r.name, from: r.from.filter((f) => typeof f === "string"), on: r.on !== false }));
-  // ค่าเริ่มต้นที่เพิ่มมาใหม่ในรุ่นหลัง ใส่ให้ครั้งเดียว (รุ่นแรกมีแค่ FSH-Butchery&SeaFood)
-  if (!Array.isArray(seen)) seen = ["FSH-Butchery&SeaFood"];
-  for (const d of defaults) {
-    if (seen.includes(d.name) || rules.some((r) => sameName(r.name, d.name))) continue;
-    if (d.from.some((f) => rules.some((r) => r.on && r.from.some((x) => sameName(x, f))))) d.on = false;
-    rules.push(d);
-  }
-  return rules;
-}
-
-function saveMergeRules(rules) {
-  try {
-    localStorage.setItem(MERGE_KEY, JSON.stringify(rules));
-    localStorage.setItem(MERGE_SEEN_KEY, JSON.stringify(MERGE_RULES.map((r) => r.name)));
-  } catch { /* ไม่เป็นไร */ }
-}
-
-/** ชื่อไฟล์ที่หน้านี้จะไปอยู่ (ถ้าแผนกนี้อยู่ในกติการวมที่เปิดอยู่) */
-function mergedName(dept, rules) {
-  if (!dept) return dept;
-  const rule = rules.find((r) => r.on && r.from.some((f) => sameName(f, dept)));
-  return rule ? rule.name : dept;
-}
-
-function renderMerge() {
-  const rules = loadMergeRules();
-  const eff = effective();
-  $("merge-list").replaceChildren(...rules.map((r, k) => {
-    const pages = eff.filter((v) => v && r.from.some((f) => sameName(f, v))).length;
-    const box = el("input", { type: "checkbox" });
-    box.checked = r.on;
-    box.addEventListener("change", () => {
-      rules[k].on = box.checked;
-      saveMergeRules(rules);
-    });
-    const remove = el("button", { class: "btn ghost", type: "button", text: "ลบ", "aria-label": `ลบการรวม ${r.name}` });
-    remove.addEventListener("click", () => {
-      if (!confirm(`ลบการรวมไฟล์ "${r.name}"?`)) return;
-      rules.splice(k, 1);
-      saveMergeRules(rules);
-      renderMerge();
-    });
-    return el("li", { class: "merge-row" },
-      el("label", { class: "check" }, box,
-        el("span", {},
-          el("b", { text: r.name }),
-          el("small", { text: `รวม ${r.from.join(" + ")}${total ? ` · ไฟล์นี้ ${pages} หน้า` : ""}` }))),
-      remove);
+function renderList(items) {
+  const byDay = new Map();
+  items.sort((a, b) => b.date.localeCompare(a.date) || b.created_at - a.created_at)
+    .forEach((t) => { if (!byDay.has(t.date)) byDay.set(t.date, []); byDay.get(t.date).push(t); });
+  $("empty").hidden = items.length > 0;
+  const dayFmt = new Intl.DateTimeFormat("th-TH", { weekday: "short", day: "numeric", month: "short" });
+  $("tx-list").replaceChildren(...[...byDay].map(([date, list]) => {
+    const [y, m, d] = date.split("-").map(Number);
+    const net = list.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+    return el("section", { class: "day" },
+      el("div", { class: "day-head" },
+        el("span", { text: date === today() ? "วันนี้" : dayFmt.format(new Date(y, m - 1, d)) }),
+        el("span", { class: net < 0 ? "neg" : "pos", text: `${net < 0 ? "−" : "+"}${baht(Math.abs(net))}` })),
+      ...list.map((t) => el("button", { class: `tx ${t.type}`, type: "button", onclick: () => openTx(t) },
+        el("span", { class: "dot", "aria-hidden": "true" }),
+        el("span", { class: "tx-main" },
+          el("b", { text: t.category }),
+          el("small", { text: [t.note, t.member].filter(Boolean).join(" · ") || " " })),
+        el("span", { class: "tx-amt", text: `${t.type === "income" ? "+" : "−"}${baht(t.amount)}` }),
+        cfg.url && pending.has(t.id) ? el("span", { class: "wait", title: "รอส่ง", text: "•" }) : null)));
   }));
 }
 
-function renderMergePick() {
-  const inFile = [...new Set(effective().filter(Boolean))];
-  const names = [...new Set([...inFile, ...DEPARTMENTS, ...loadCustomDepartments()])];
-  $("merge-pick").replaceChildren(...names.map((n) => {
-    const box = el("input", { type: "checkbox", value: n });
-    return el("label", { class: `check pick${inFile.includes(n) ? " in-file" : ""}` }, box, el("span", { text: n }));
+function renderCats(items) {
+  const group = (key, list) => {
+    const m = new Map();
+    list.forEach((t) => m.set(t[key] || "ไม่ระบุ", (m.get(t[key] || "ไม่ระบุ") || 0) + t.amount));
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  const ofType = items.filter((t) => t.type === catType);
+  const total = ofType.reduce((s, t) => s + t.amount, 0) || 1;
+  const bars = (rows) => rows.map(([name, amt]) => el("li", { class: `bar ${catType}` },
+    el("div", { class: "bar-head" }, el("span", { text: name }), el("b", { text: baht(amt) })),
+    el("div", { class: "bar-track" }, fill(Math.max(2, (amt / total) * 100))),
+    el("small", { text: `${Math.round((amt / total) * 100)}%` })));
+  const fill = (pct) => {
+    const node = el("div", { class: "bar-fill" });
+    node.style.width = `${pct}%`; // ตั้งผ่าน CSSOM เพราะ CSP ไม่อนุญาต style แบบ inline
+    return node;
+  };
+  const cats = group("category", ofType);
+  $("cat-list").replaceChildren(...(cats.length ? bars(cats) : [el("li", { class: "empty", text: "ยังไม่มีรายการ" })]));
+  $("member-list").replaceChildren(...bars(group("member", ofType)));
+}
+
+// ---------------------------------------------------------------- เพิ่ม / แก้รายการ
+
+let editing = null;
+let formType = "expense";
+let formCat = "";
+
+function catsFor(type) {
+  const used = [...txs.values()].filter((t) => t.type === type && !t.deleted).map((t) => t.category);
+  return [...new Set([...DEFAULT_CATS[type], ...(customCats[type] || []), ...used])];
+}
+
+function setFormType(type) {
+  formType = type;
+  $("type-expense").classList.toggle("active", type === "expense");
+  $("type-income").classList.toggle("active", type === "income");
+  $("tx-form").dataset.type = type;
+  if (!catsFor(type).includes(formCat)) formCat = "";
+  renderChips();
+}
+
+function renderChips() {
+  const chips = catsFor(formType).map((c) => el("button", {
+    class: `chip${c === formCat ? " active" : ""}`, type: "button", text: c,
+    onclick: () => { formCat = c; $("f-cat-new").hidden = true; $("f-cat-new").value = ""; renderChips(); },
   }));
+  chips.push(el("button", {
+    class: `chip add${$("f-cat-new").hidden ? "" : " active"}`, type: "button", text: "+ หมวดใหม่",
+    onclick: () => { formCat = ""; $("f-cat-new").hidden = false; renderChips(); $("f-cat-new").focus(); },
+  }));
+  $("f-cats").replaceChildren(...chips);
 }
 
-function addMergeRule() {
-  const name = cleanName($("merge-name").value);
-  const from = [...$("merge-pick").querySelectorAll("input:checked")].map((b) => b.value);
-  const fail = (msg) => showError("merge-error", msg);
-  if (!name) return fail("กรุณาใส่ชื่อไฟล์รวม");
-  if (name === REVIEW_NAME) return fail(`ห้ามใช้ชื่อ "${REVIEW_NAME}"`);
-  if (from.length < 2) return fail("เลือกแผนกที่จะรวมอย่างน้อย 2 แผนก");
-  const rules = loadMergeRules();
-  const taken = from.find((f) => rules.some((r) => r.on && r.from.some((x) => sameName(x, f))));
-  if (taken) return fail(`แผนก ${taken} อยู่ในการรวมอื่นแล้ว ติ๊กออกหรือลบอันเดิมก่อน`);
-  rules.push({ name, from, on: true });
-  saveMergeRules(rules);
-  $("merge-error").hidden = true;
-  $("merge-name").value = "";
-  $("merge-add").open = false;
-  renderMerge();
+function openTx(t = null) {
+  editing = t;
+  $("tx-title").textContent = t ? "แก้รายการ" : "เพิ่มรายการ";
+  $("tx-delete").hidden = !t;
+  $("tx-error").hidden = true;
+  $("f-cat-new").hidden = true;
+  $("f-cat-new").value = "";
+  formCat = t ? t.category : "";
+  $("f-amount").value = t ? String(t.amount / 100) : "";
+  $("f-date").value = t ? t.date : (today().startsWith(month) ? today() : `${month}-01`);
+  $("f-member").value = t ? t.member : cfg.member || "";
+  $("f-note").value = t ? t.note : "";
+  setFormType(t ? t.type : formType);
+  $("tx-dialog").showModal();
+  if (!t) setTimeout(() => $("f-amount").focus(), 50);
 }
 
-function sampleIndexes(n, max = 30) {
-  // ใช้หน้าที่ติดกันตั้งแต่ต้นไฟล์ เพราะหน้าติดกันมักเป็นแผนกเดียวกัน จึงเห็นว่าบรรทัดไหน "ซ้ำเป็นกลุ่ม"
-  return [...Array(Math.min(n, max)).keys()];
-}
-
-function goodGrouping(sigs, memory) {
-  // บรรทัดที่ใช้ได้ต้อง: มีหมึกเกือบทุกหน้า และ "ซ้ำเป็นกลุ่ม" (ไม่เหมือนกันทุกหน้า และไม่ต่างกันทุกหน้า)
-  const present = sigs.filter(Boolean);
-  if (present.length < Math.ceil(sigs.length * 0.8)) return false;
-  const k = cluster(present).clusters.length;
-  if (k >= 2 && k <= Math.max(2, Math.floor(present.length * 0.8))) return true;
-  return k === 1 && present.some((sig) => recall(sig, memory)); // ไฟล์มีแผนกเดียวที่รู้จัก
-}
-
-/** ข้อความและแถบความคืบหน้าตอนโหลด (done = 0-1) */
-function setLoading(text, done) {
-  if ($("loading-text").textContent !== text) $("loading-text").textContent = text;
-  if (done !== undefined) $("load-fill").style.width = `${Math.round(Math.min(1, done) * 100)}%`;
-}
-
-async function pageWork(i, fn) {
-  const page = await pdfDoc.getPage(i + 1);
-  return withTimeout(fn(page).catch(() => null), PAGE_TIMEOUT);
-}
-
-async function autoGroup() {
-  // เทียบภาพช่องชื่อหน่วยงานของทุกหน้า แล้วใส่แผนกที่หน้าแรกของแต่ละกลุ่ม
-  const memory = loadMemory();
-  const sample = sampleIndexes(total);
-  const status = (text, done) => setLoading(text, done);
-
-  // 1) ลองกรอบที่รู้จัก (รายงานแบบสแกน A4) ก่อน
-  let sigOf = (page) => pageSignature(page, DEPT_BOX);
-  deptBox = DEPT_BOX;
-  const fixed = [];
-  for (const i of sample) {
-    if (skipAuto) return;
-    status("กำลังหาช่องชื่อหน่วยงาน", 0.3 + 0.1 * (fixed.length / sample.length));
-    fixed.push(await pageWork(i, sigOf));
-    await nextFrame();
+function saveTx(event) {
+  event.preventDefault();
+  const fail = (msg) => { $("tx-error").textContent = msg; $("tx-error").hidden = false; };
+  const amount = parseAmount($("f-amount").value);
+  if (amount === null) return fail("ใส่จำนวนเงินให้ถูกต้อง เช่น 120 หรือ 89.50");
+  const category = (formCat || $("f-cat-new").value).replace(/\s+/g, " ").trim().slice(0, 40);
+  if (!category) return fail("เลือกหมวด");
+  const date = $("f-date").value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail("เลือกวันที่");
+  if (!DEFAULT_CATS[formType].includes(category) && !(customCats[formType] || []).includes(category)) {
+    customCats = { ...customCats, [formType]: [...(customCats[formType] || []), category] };
+    write(KEY.cats, customCats);
   }
-  let sigs = [];
-  if (goodGrouping(fixed, memory)) {
-    sigs = fixed; // หน้าตัวอย่างทำแล้ว ไม่ต้องวาดซ้ำ
-  } else {
-    // 2) รายงานรูปแบบอื่น: หาบรรทัดที่ซ้ำเป็นกลุ่มในฝั่งขวาของหัวเอกสารเอง
-    const pixels = [];
-    for (const i of sample) {
-      if (skipAuto) return;
-      status("กำลังหาช่องชื่อหน่วยงาน", 0.4 + 0.1 * (pixels.length / sample.length));
-      pixels.push(await pageWork(i, (page) => renderPixels(page, SEARCH_BOX, 480)));
-      await nextFrame();
-    }
-    const first = pixels.find(Boolean);
-    const bands = first ? findBands(first) : [];
-    let best = null;
-    for (const band of bands) {
-      const sigs = pixels.map((px) => (px ? bandSignature(px, band) : null));
-      if (!goodGrouping(sigs, memory)) continue;
-      const ink = sigs.filter(Boolean).reduce((s, b) => s + b.reduce((a, v) => a + v, 0), 0);
-      if (!best || ink > best.ink) best = { band, ink };
-    }
-    pixels.length = 0;
-    if (!best) { groups = []; return; } // ไม่พบช่องชื่อหน่วยงาน ให้ HR เลือกเองทีละหน้า
-    const { band } = best;
-    const fy = (v) => SEARCH_BOX[1] + v * (SEARCH_BOX[3] - SEARCH_BOX[1]);
-    deptBox = [SEARCH_BOX[0], fy(band.y0), SEARCH_BOX[2], fy(band.y1)];
-    sigOf = async (page) => bandSignature(await renderPixels(page, SEARCH_BOX, 480), band);
-  }
+  const now = Date.now();
+  const t = {
+    ...(editing || { id: newId(), created_at: now }),
+    date, type: formType, amount, category,
+    note: $("f-note").value.trim().slice(0, 200),
+    member: $("f-member").value.trim().slice(0, 30),
+    updated_at: now, deleted: 0,
+  };
+  txs.set(t.id, t);
+  pending.add(t.id);
+  persist();
+  $("tx-dialog").close();
+  month = date.slice(0, 7);
+  render();
+  toast(editing ? "แก้แล้ว" : "บันทึกแล้ว");
+  sync();
+}
 
-  // 3) ทุกหน้า
-  for (let i = sigs.length; i < total; i++) {
-    if (skipAuto) return;
-    status("กำลังจัดแผนก", 0.5 + 0.5 * (i / total));
-    sigs.push(await pageWork(i, sigOf));
-    if (i % 2 === 1) await nextFrame();
-  }
-  const { clusterOf, clusters } = cluster(sigs);
-  groups = clusters.map((c) => {
-    const fromFile = c.pages.map((p) => (origin[p] === "file" ? explicit[p] : null)).find(Boolean);
-    const remembered = fromFile ? null : recall(c.sig, memory);
-    return { ...c, name: fromFile || remembered || null, source: fromFile ? "file" : remembered ? "memory" : "new" };
+function deleteTx() {
+  if (!editing || !confirm(`ลบรายการ ${editing.category} ${baht(editing.amount)} บาท?`)) return;
+  txs.set(editing.id, { ...editing, deleted: 1, updated_at: Date.now() });
+  pending.add(editing.id);
+  persist();
+  $("tx-dialog").close();
+  render();
+  toast("ลบแล้ว");
+  sync();
+}
+
+// ---------------------------------------------------------------- ซิงก์
+
+let syncing = null;
+
+function setStatus(text, kind = "") {
+  $("sync-status").textContent = text;
+  $("sync-status").className = `sync ${kind}`;
+}
+
+function statusIdle() {
+  if (!cfg.url || !cfg.pass) return setStatus("ยังไม่เชื่อมต่อ · เก็บในเครื่อง");
+  if (pending.size) return setStatus(`รอส่ง ${pending.size} รายการ`, "warn");
+  setStatus(`ซิงก์แล้ว ${new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}`, "ok");
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(cfg.url.replace(/\/+$/, "") + path, {
+    ...options,
+    headers: { Authorization: `Bearer ${cfg.pass}`, "Content-Type": "application/json", ...(options.headers || {}) },
   });
-  if (groups.length < 2 && !groups.some((g) => g.name)) {
-    groups = []; // ไม่พบช่องชื่อหน่วยงานที่ต่างกัน ให้ HR เลือกเองทีละหน้า
-    return;
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.message || `เซิร์ฟเวอร์ตอบ ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
-  let last = null;
-  clusterOf.forEach((k, i) => {
-    if (k === null) return;
-    if (k !== last && origin[i] !== "user") {
-      explicit[i] = `${CLUSTER}${k}`;
-      origin[i] = "auto";
-    } else if (origin[i] === "file") {
-      explicit[i] = null; // กลุ่มเป็นคนกำหนดแล้ว ไม่ต้องซ้ำ
-      origin[i] = null;
-    }
-    last = k;
-  });
+  return body;
 }
 
-const clusterIndex = (v) => (typeof v === "string" && v.startsWith(CLUSTER) ? Number(v.slice(CLUSTER.length)) : -1);
+function sync() {
+  if (!cfg.url || !cfg.pass) { statusIdle(); return Promise.resolve(); }
+  if (syncing) return syncing;
+  syncing = (async () => {
+    setStatus("กำลังซิงก์…");
+    try {
+      // 1) ส่งรายการที่แก้ในเครื่อง
+      const ids = [...pending];
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500).map((id) => txs.get(id)).filter(Boolean);
+        await api("/api/tx", { method: "POST", body: JSON.stringify({ items: chunk }) });
+        chunk.forEach((t) => { if (txs.get(t.id)?.updated_at === t.updated_at) pending.delete(t.id); });
+        persist();
+      }
+      // 2) รับรายการที่คนอื่นแก้ (ย้อนเวลาเผื่อไว้ 5 วินาที)
+      const since = Math.max(0, read(KEY.pull, 0) - 5000);
+      const { items, now } = await api(`/api/tx?since=${since}`);
+      for (const t of items) {
+        if (pending.has(t.id)) continue; // ในเครื่องแก้ใหม่กว่า รอส่งก่อน
+        txs.set(t.id, { ...t, amount: Number(t.amount), deleted: Number(t.deleted) });
+      }
+      write(KEY.pull, now);
+      persist();
+      statusIdle();
+      render();
+    } catch (e) {
+      if (e.status === 401) setStatus("รหัสครอบครัวไม่ถูกต้อง", "bad");
+      else setStatus(`ออฟไลน์ · รอส่ง ${pending.size} รายการ`, "warn");
+      throw e;
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing.catch(() => {});
+}
 
-// ---------------------------------------------------------------- เปิดไฟล์
+// ---------------------------------------------------------------- ตั้งค่า
 
-async function openFile(file) {
-  $("upload-error").hidden = true;
-  if (!file) return;
-  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
-    showError("upload-error", "กรุณาเลือกไฟล์ PDF");
-    return;
-  }
-  $("loading").hidden = false;
-  $("dropzone").hidden = true;
+function openSettings(prefillUrl) {
+  $("s-url").value = prefillUrl || cfg.url;
+  $("s-pass").value = cfg.pass;
+  $("s-member").value = cfg.member;
+  $("set-msg").textContent = prefillUrl ? "ได้รับลิงก์ชวนแล้ว ใส่รหัสครอบครัวและชื่อของคุณ" : "";
+  $("set-dialog").showModal();
+}
+
+async function saveSettings() {
+  const url = $("s-url").value.trim().replace(/\/+$/, "");
+  const pass = $("s-pass").value;
+  const member = $("s-member").value.trim().slice(0, 30);
+  const local = /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(url); // สำหรับทดสอบในเครื่องเท่านั้น
+  if (url && !local && !/^https:\/\/[^\s/]+(\/.*)?$/.test(url)) { $("set-msg").textContent = "ที่อยู่ต้องขึ้นต้นด้วย https://"; return; }
+  const changedServer = url !== cfg.url;
+  cfg = { url, pass, member };
+  write(KEY.cfg, cfg);
+  if (!url || !pass) { $("set-msg").textContent = "บันทึกชื่อแล้ว (ยังไม่เชื่อมต่อ)"; statusIdle(); return; }
+  if (changedServer) write(KEY.pull, 0);
+  $("set-msg").textContent = "กำลังเชื่อมต่อ…";
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    if (String.fromCharCode(...bytes.slice(0, 4)) !== "%PDF") throw new Error("ไฟล์นี้ไม่ใช่ PDF");
-    await closeDocument();
-    // pdf.js ย้ายข้อมูลไปให้ worker จึงส่งสำเนาไป และเก็บต้นฉบับไว้แยกไฟล์
-    pdfDoc = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
-    srcBytes = bytes;
-    total = pdfDoc.numPages;
-    sourceName = file.name;
-    explicit = new Array(total).fill(null);
-    origin = new Array(total).fill(null);
-    outputs = [];
-    groups = [];
-
-    skipAuto = false;
-    $("btn-skip").hidden = false;
-    let prev = null;
-    for (let i = 0; i < total && !skipAuto; i++) {
-      setLoading("กำลังอ่านไฟล์", 0.3 * (i / total));
-      const s = await pageWork(i, suggestDepartment);
-      if (s && s !== prev) { explicit[i] = s; origin[i] = "file"; }
-      if (s) prev = s;
-      if (i % 4 === 3) await nextFrame();
-    }
-    await autoGroup();
-    if (skipAuto) groups = [];
-    renderAssign();
-    showStep(2);
+    await api("/api/ping");
+    [...txs.keys()].forEach((id) => { if (changedServer) pending.add(id); }); // ส่งรายการเดิมในเครื่องขึ้นไปด้วย
+    persist();
+    await sync();
+    $("set-msg").textContent = "เชื่อมต่อสำเร็จ";
+    setTimeout(() => $("set-dialog").close(), 600);
   } catch (e) {
-    const msg = e?.name === "PasswordException" ? "ไฟล์ PDF มีรหัสผ่าน กรุณาปลดรหัสผ่านก่อน"
-      : e?.name === "InvalidPDFException" ? "เปิดไฟล์ PDF ไม่ได้ ไฟล์อาจเสียหาย"
-      : e.message || "เปิดไฟล์ไม่สำเร็จ";
-    showError("upload-error", msg);
-  } finally {
-    $("loading").hidden = true;
-    $("btn-skip").hidden = true;
-    setLoading("กำลังเปิดไฟล์", 0);
-    $("dropzone").hidden = false;
-    $("file-input").value = "";
+    $("set-msg").textContent = e.status === 401 ? "รหัสครอบครัวไม่ถูกต้อง" : `เชื่อมต่อไม่ได้: ${e.message}`;
   }
 }
 
-// ---------------------------------------------------------------- วาดภาพหน้า
-
-let renderChain = Promise.resolve();
-
-function renderQueued(fn) {
-  // วาดทีละภาพ ไม่ให้มือถือทำงานหนักเกิน
-  renderChain = renderChain.then(fn, fn).catch(() => {});
-  return renderChain;
+function invite() {
+  if (!cfg.url) { $("set-msg").textContent = "ใส่ที่อยู่เซิร์ฟเวอร์ก่อน"; return; }
+  const link = `${location.origin}${location.pathname}#join=${encodeURIComponent(cfg.url)}`;
+  const text = `ชวนใช้แอปรายรับรายจ่ายครอบครัว เปิดลิงก์แล้วใส่รหัสครอบครัว\n${link}`;
+  if (navigator.share) navigator.share({ text }).catch(() => {});
+  else navigator.clipboard?.writeText(link).then(() => toast("คัดลอกลิงก์แล้ว"));
 }
 
-async function renderRegion(pageNo, canvas, box, targetWidth) {
-  if (!pdfDoc) return;
-  const page = await pdfDoc.getPage(pageNo);
-  const base = page.getViewport({ scale: 1 });
-  const [x0, y0, x1, y1] = box || [0, 0, 1, 1];
-  const scale = targetWidth / ((x1 - x0) * base.width);
-  const vp = page.getViewport({ scale });
-  canvas.width = Math.round((x1 - x0) * vp.width);
-  canvas.height = Math.round((y1 - y0) * vp.height);
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await page.render({ canvasContext: ctx, viewport: vp, transform: [1, 0, 0, 1, -x0 * vp.width, -y0 * vp.height] }).promise;
-  page.cleanup();
-}
-
-function observeThumbnails() {
-  renderObserver?.disconnect();
-  renderObserver = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const canvas = entry.target;
-      renderObserver.unobserve(canvas);
-      const width = Math.min(900, Math.round(canvas.clientWidth * Math.min(2, window.devicePixelRatio || 1)) || 700);
-      const box = canvas.dataset.crop === "dept" ? deptBox : HEADER_BOX;
-      renderQueued(() => renderRegion(Number(canvas.dataset.page), canvas, box, width)
-        .then(() => canvas.classList.add("ready")));
-    }
-  }, { rootMargin: "600px 0px" });
-  document.querySelectorAll("canvas.thumb, canvas.dept-crop").forEach((c) => renderObserver.observe(c));
-}
-
-// ---------------------------------------------------------------- ดูทั้งหน้า
-
-let viewer = { pages: [], index: 0, title: "" };
-
-function openViewer(pages, index, title) {
-  viewer = { pages, index, title };
-  $("preview-dialog").showModal();
-  drawViewer();
-}
-
-async function drawViewer() {
-  const { pages, index, title } = viewer;
-  $("pv-title").textContent = `${title} · หน้า ${pages[index] + 1}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ""}`;
-  $("pv-prev").disabled = index === 0;
-  $("pv-next").disabled = index === pages.length - 1;
-  const canvas = $("pv-canvas");
-  const width = Math.min(1600, Math.round(($("preview-dialog").clientWidth || 390) * (window.devicePixelRatio || 1)));
-  await renderQueued(() => renderRegion(pages[index] + 1, canvas, null, width));
-}
-
-// ---------------------------------------------------------------- กำหนดแผนก
-
-function effective() {
-  const out = [];
-  let current = null;
-  for (const v of explicit) {
-    if (v === EXCLUDED) { out.push(null); continue; }
-    const k = clusterIndex(v);
-    if (k >= 0) current = groups[k]?.name || null; // กลุ่มที่ยังไม่ตั้งชื่อ = ยังไม่ระบุ
-    else if (v) current = v;
-    out.push(current);
-  }
-  return out;
-}
-
-function renderAssign() {
-  $("assign-source").textContent = `${sourceName} · ${total} หน้า`;
-  $("split-error").hidden = true;
-  clearTimeout(refreshTimer);
-  refreshTimer = 0;
-  $("page-list").replaceChildren(...explicit.map((_, i) => pageRow(i)));
-  renderGroups();
-  refreshAssign();
-  observeThumbnails();
-}
-
-function renderGroups() {
-  const panel = $("auto-groups");
-  panel.hidden = groups.length === 0;
-  if (!groups.length) return;
-  const known = groups.filter((g) => g.name).length;
-  $("auto-summary").textContent = known === groups.length
-    ? `พบ ${groups.length} แผนก ตั้งชื่อครบแล้ว ตรวจภาพอีกครั้งแล้วกดสร้างไฟล์ได้เลย`
-    : `พบ ${groups.length} แผนก · ตั้งชื่อแล้ว ${known} · ใส่ชื่อแผนกที่เหลือ (ครั้งเดียว ครั้งหน้าแอปจำได้)`;
-  $("auto-list").replaceChildren(...groups.map((g, k) => {
-    const input = el("input", {
-      class: "dept-input", type: "text", list: "dept-options", autocomplete: "off",
-      autocapitalize: "off", spellcheck: "false", enterkeyhint: "done",
-      placeholder: "ชื่อแผนกของกลุ่มนี้", "aria-label": `ชื่อแผนกกลุ่มที่ ${k + 1}`,
-    });
-    input.value = g.name || "";
-    input.addEventListener("input", () => {
-      g.name = input.value.replace(/\s+/g, " ").trim() || null;
-      g.source = g.name ? "user" : "new";
-      refreshSoon();
-      refreshGroupTags();
-    });
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
-    const canvas = el("canvas", { class: "dept-crop", "data-page": String(g.pages[0] + 1), "data-crop": "dept" });
-    return el("li", { class: "auto-row", "data-k": String(k) },
-      el("div", { class: "row-head" },
-        el("span", { class: "page-no", text: `กลุ่ม ${k + 1} · ${g.pages.length} หน้า · หน้า ${pagesLabel(g.pages.map((p) => p + 1))}` }),
-        el("span", { class: "tag" })),
-      el("button", { class: "thumb-button", type: "button", title: "ดูทั้งหน้า",
-        onclick: () => openViewer(g.pages, 0, `กลุ่ม ${k + 1}`) }, canvas),
-      input);
-  }));
-  refreshGroupTags();
-}
-
-function refreshGroupTags() {
-  document.querySelectorAll(".auto-row").forEach((row) => {
-    const g = groups[Number(row.dataset.k)];
-    const tag = row.querySelector(".tag");
-    tag.className = "tag";
-    if (!g.name) { tag.textContent = "ใส่ชื่อ"; tag.classList.add("warn"); }
-    else if (g.source === "memory") { tag.textContent = "จำได้จากครั้งก่อน"; tag.classList.add("file"); }
-    else if (g.source === "file") { tag.textContent = "อ่านจากไฟล์"; tag.classList.add("file"); }
-    else { tag.textContent = "ตั้งชื่อแล้ว"; tag.classList.add("start"); }
-  });
-}
-
-function pageRow(i) {
-  const page = i + 1;
-  const input = el("input", {
-    class: "dept-input", type: "text", list: "dept-options", autocomplete: "off",
-    autocapitalize: "off", spellcheck: "false", enterkeyhint: "next",
-    "aria-label": `แผนกของหน้า ${page}`, "data-i": String(i),
-  });
-  input.addEventListener("input", () => {
-    const v = input.value.replace(/\s+/g, " ").trim();
-    explicit[i] = v || null;
-    origin[i] = v ? "user" : null;
-    refreshSoon(i);
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter") return;
-    e.preventDefault();
-    input.blur();
-  });
-  const exclude = el("button", { class: "btn ghost", type: "button", "data-i": String(i) });
-  exclude.addEventListener("click", () => {
-    if (explicit[i] === EXCLUDED) { explicit[i] = null; origin[i] = null; }
-    else { explicit[i] = EXCLUDED; origin[i] = "user"; }
-    refreshAssign();
-  });
-  const canvas = el("canvas", { class: "thumb", "data-page": String(page), "aria-label": `หัวเอกสารหน้า ${page}` });
-  const thumbButton = el("button", { class: "thumb-button", type: "button", title: "ดูทั้งหน้า" }, canvas);
-  thumbButton.addEventListener("click", () => openViewer([...Array(total).keys()], i, sourceName));
-  return el("li", { class: "page-row", "data-i": String(i) },
-    el("div", { class: "row-head" }, el("span", { class: "page-no", text: `หน้า ${page}` }), el("span", { class: "tag" })),
-    thumbButton,
-    input,
-    el("div", { class: "row-foot" }, exclude));
-}
-
-// พิมพ์ทีละตัวไม่ต้องอัปเดตทุกแถวทันที (ไฟล์หลายร้อยหน้าจะค้าง) รวบไว้อัปเดตครั้งเดียว
-let refreshTimer = 0;
-let refreshSkip = -1;
-function refreshSoon(skipInputIndex = -1) {
-  refreshSkip = skipInputIndex;
-  clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => { refreshTimer = 0; refreshAssign(refreshSkip); }, 150);
-}
-
-function flushRefresh() {
-  if (!refreshTimer) return;
-  clearTimeout(refreshTimer);
-  refreshTimer = 0;
-  refreshAssign(refreshSkip);
-}
-
-let optionKey = "";
-
-function refreshAssign(skipInputIndex = -1) {
-  const eff = effective();
-  const order = new Map();
-  for (const v of eff) if (v && !order.has(v)) order.set(v, order.size);
-
-  document.querySelectorAll(".page-row").forEach((row) => {
-    const i = Number(row.dataset.i);
-    const input = row.querySelector(".dept-input");
-    const tag = row.querySelector(".tag");
-    const exclude = row.querySelector(".ghost");
-    const isExcluded = explicit[i] === EXCLUDED;
-    const k = clusterIndex(explicit[i]);
-    if (i !== skipInputIndex) input.value = isExcluded || !explicit[i] ? "" : k >= 0 ? (groups[k]?.name || "") : explicit[i];
-    input.disabled = isExcluded;
-    input.placeholder = isExcluded ? "ยกเว้นหน้านี้ (ไปรอตรวจสอบ)"
-      : eff[i] ? `ตามหน้าก่อน: ${eff[i]}` : "เลือกหรือพิมพ์ชื่อแผนก";
-    exclude.textContent = isExcluded ? "ยกเลิกยกเว้น" : "ยกเว้นหน้านี้";
-
-    row.classList.toggle("starts", Boolean(eff[i] && (i === 0 || eff[i - 1] !== eff[i])));
-    row.classList.toggle("unassigned", !eff[i]);
-    for (let s = 0; s < STRIPES; s++) row.classList.remove(`stripe-${s}`);
-    if (eff[i]) row.classList.add(`stripe-${order.get(eff[i]) % STRIPES}`);
-
-    tag.className = "tag";
-    if (isExcluded) { tag.textContent = "ยกเว้น"; tag.classList.add("warn"); }
-    else if (k >= 0 && !eff[i]) { tag.textContent = `กลุ่ม ${k + 1} · ใส่ชื่อด้านบน`; tag.classList.add("warn"); }
-    else if (k >= 0) { tag.textContent = `แอปจัดให้ · กลุ่ม ${k + 1}`; tag.classList.add("file"); }
-    else if (explicit[i] && origin[i] === "file") { tag.textContent = "อ่านจากไฟล์ · ตรวจอีกครั้ง"; tag.classList.add("file"); }
-    else if (explicit[i]) { tag.textContent = "เริ่มแผนกใหม่"; tag.classList.add("start"); }
-    else if (eff[i]) { tag.textContent = "ตามหน้าก่อน"; }
-    else { tag.textContent = "ยังไม่ระบุ"; tag.classList.add("warn"); }
-  });
-
-  renderMerge();
-  const assigned = eff.filter(Boolean).length;
-  $("assign-count").textContent = `ระบุแล้ว ${assigned}/${eff.length} หน้า · ${order.size} แผนก`;
-  $("assign-fill").style.width = `${eff.length ? (assigned / eff.length) * 100 : 0}%`;
-  const names = [...new Set([...DEPARTMENTS, ...loadCustomDepartments(), ...order.keys()])];
-  const key = names.join("\n");
-  if (key !== optionKey) {
-    optionKey = key;
-    $("dept-options").replaceChildren(...names.map((n) => el("option", { value: n })));
-  }
-}
-
-// ---------------------------------------------------------------- สร้างไฟล์
-
-async function buildOutputs() {
-  flushRefresh();
-  $("split-error").hidden = true;
-  const eff = effective();
-  const missing = eff.map((v, i) => (v ? null : i + 1)).filter(Boolean);
-  if (missing.length === eff.length) {
-    showError("split-error", "ยังไม่ได้เลือกแผนกเลย กรุณาเลือกแผนกที่หน้าแรกของแต่ละแผนก");
-    return;
-  }
-  if (missing.length && !confirm(`หน้า ${pagesLabel(missing)} ยังไม่ระบุแผนก จะไปอยู่ไฟล์ "${REVIEW_NAME}"\nดำเนินการต่อหรือไม่?`)) return;
-
-  const button = $("btn-split");
-  button.disabled = true;
-  button.textContent = "กำลังสร้าง...";
-  try {
-    const rules = loadMergeRules();
-    const parts = split(eff.map((v) => mergedName(v, rules)), total)
-      .map((g) => ({ ...g, members: [...new Set(g.pages.map((p) => eff[p]).filter(Boolean))] }));
-    const filenames = uniqueFilenames(parts.map((g) => g.name));
-    const { PDFDocument } = window.PDFLib;
-    const src = await PDFDocument.load(srcBytes, { updateMetadata: false });
-    const built = [];
-    for (let k = 0; k < parts.length; k++) {
-      const g = parts[k];
-      button.textContent = `กำลังสร้าง ${k + 1}/${parts.length}...`;
-      await nextFrame();
-      const out = await PDFDocument.create({ updateMetadata: false });
-      const copied = await out.copyPages(src, g.pages);
-      copied.forEach((p) => out.addPage(p));
-      const bytes = await out.save();
-      await verifyCopy(bytes, src, g.pages);
-      built.push({
-        ...g,
-        filename: filenames[k],
-        file: new File([bytes], filenames[k], { type: "application/pdf" }),
-      });
-    }
-    outputs = built;
-    rememberDepartments(split(eff, total).map((g) => g.name));
-    learnGroups();
-    renderResult();
-    showStep(3);
-  } catch (e) {
-    const msg = e?.name === "EncryptedPDFError" ? "ไฟล์ PDF มีรหัสผ่าน กรุณาปลดรหัสผ่านก่อน" : e.message;
-    showError("split-error", `สร้างไฟล์ไม่สำเร็จ: ${msg}`);
-  } finally {
-    button.disabled = false;
-    button.textContent = "สร้างไฟล์";
-  }
-}
-
-async function verifyCopy(bytes, src, pages) {
-  // ตรวจว่าไฟล์ใหม่มีครบทุกหน้า และขนาดหน้าตรงกับต้นฉบับ
-  const check = await window.PDFLib.PDFDocument.load(bytes, { updateMetadata: false });
-  if (check.getPageCount() !== pages.length) throw new Error("จำนวนหน้าที่คัดลอกไม่ตรงกับที่กำหนด");
-  pages.forEach((p, i) => {
-    const a = src.getPage(p).getSize();
-    const b = check.getPage(i).getSize();
-    if (Math.abs(a.width - b.width) > 0.01 || Math.abs(a.height - b.height) > 0.01) {
-      throw new Error("ขนาดหน้าที่คัดลอกไม่ตรงกับต้นฉบับ");
-    }
-  });
-}
-
-function renderResult() {
-  $("source-name").textContent = sourceName;
-  const pageSum = outputs.reduce((s, o) => s + o.pages.length, 0);
-  const ok = pageSum === total;
-  $("coverage").className = `coverage ${ok ? "ok" : "bad"}`;
-  $("coverage").textContent = ok ? `✓ ครบ ${pageSum}/${total} หน้า ไม่ซ้ำ` : `✗ ได้ ${pageSum}/${total} หน้า`;
-  const review = outputs.find((o) => o.review);
-  $("kpi-pages").textContent = total;
-  $("kpi-depts").textContent = outputs.filter((o) => !o.review).length;
-  $("kpi-review").textContent = review ? review.pages.length : 0;
-  $("kpi-review").parentElement.classList.toggle("warn", Boolean(review));
-
-  const deptCount = outputs.filter((o) => !o.review).length;
-  $("btn-share-all").textContent = `แชร์ทุกไฟล์ครั้งเดียว (${deptCount} ไฟล์)`;
-  $("btn-share-all").hidden = deptCount < 2;
-  $("share-all-note").hidden = deptCount < 2;
-  $("share-all-note").textContent = review
-    ? `ส่ง PDF แยกตามแผนกทั้ง ${deptCount} ไฟล์เข้ากลุ่มเดียวในครั้งเดียว (ไม่รวมไฟล์ "${REVIEW_NAME}")`
-    : `ส่ง PDF แยกตามแผนกทั้ง ${deptCount} ไฟล์เข้ากลุ่มเดียวในครั้งเดียว ถ้าแต่ละแผนกส่งคนละกลุ่ม ให้แชร์ทีละแผนกด้านล่าง`;
-  $("group-list").replaceChildren(...outputs.map((o, k) => {
-    const pages = o.pages.map((p) => p + 1);
-    const buttons = [
-      el("button", { class: "btn small secondary", type: "button", text: "ดูหน้า",
-        onclick: () => openViewer(o.pages, 0, o.name) }),
-      el("button", { class: "btn small teal", type: "button", text: IS_IOS ? "แชร์ / บันทึก" : "แชร์",
-        onclick: () => openShare(o.file, o.name) }),
-      IS_IOS ? null : el("button", { class: "btn small secondary", type: "button", text: "ดาวน์โหลด",
-        onclick: () => download(o.file) }),
-    ];
-    return el("article", { class: `card group${o.review ? " review" : ""}`, "data-k": String(k) },
-      el("div", { class: "group-head" },
-        el("div", { class: `icon-box ${o.review ? "warn" : "blue"}`, text: o.review ? "!" : String(k + 1) }),
-        el("div", { class: "grow" },
-          el("h3", { text: o.name }),
-          el("p", { class: "helper", text: `${o.pages.length} หน้า · หน้า ${pagesLabel(pages)} ในไฟล์เดิม` }),
-          o.members?.length > 1 ? el("p", { class: "helper merged", text: `รวม ${o.members.join(" + ")}` }) : null)),
-      o.review ? el("p", { class: "notice", text: "หน้าที่ยังไม่ระบุแผนก แอปไม่เดาให้ กรุณาตรวจและจัดการเอง" }) : null,
-      el("div", { class: "row-actions" }, ...buttons));
-  }));
-}
-
-// ---------------------------------------------------------------- แชร์ / บันทึก
-
-let pendingShare = [];
-
-const canShareFiles = (files) => Boolean(navigator.canShare && navigator.canShare({ files }));
-
-function openShare(fileOrFiles, label) {
-  const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
-  pendingShare = files;
-  const many = files.length > 1;
-  $("share-title").textContent = many ? `แชร์ทุกไฟล์ (${files.length} ไฟล์)` : `แชร์ ${files[0].name}`;
-  $("share-confirm-text").textContent = many
-    ? `ยืนยันว่ากลุ่มปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของทุกแผนก (${files.length} แผนก)`
-    : "ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้";
-  $("share-list").hidden = !many;
-  $("share-list").textContent = many ? files.map((f) => f.name).join(" · ") : "";
-  $("share-confirm").checked = false;
-  $("share-status").textContent = "";
-  const can = canShareFiles(files);
-  $("share-fallback").hidden = can;
-  $("share-go").textContent = can ? "เปิดเมนูแชร์" : many ? "ดาวน์โหลด ZIP" : "ดาวน์โหลดไฟล์";
-  $("share-go").disabled = true;
-  $("share-dialog").showModal();
-}
-
-function shareAll() {
-  // ส่งทุกแผนกในครั้งเดียว เป็น PDF แยกไฟล์ตามแผนก (ไม่รวมไฟล์ "รอตรวจสอบ")
-  const files = outputs.filter((o) => !o.review).map((o) => o.file);
-  if (files.length) openShare(files, "ทั้งหมด");
-}
-
-async function doShare() {
-  const files = pendingShare;
-  if (!files.length || !$("share-confirm").checked) return;
-  if (!canShareFiles(files)) {
-    download(files.length === 1 ? files[0] : await buildZip());
-    $("share-dialog").close();
-    return;
-  }
-  try {
-    await navigator.share({ files, title: files.length === 1 ? files[0].name : "DeptFlow" });
-    $("share-dialog").close();
-  } catch (e) {
-    $("share-status").textContent = e.name === "AbortError" ? "ยกเลิกการแชร์" : "แชร์ไม่สำเร็จ กรุณาลองอีกครั้ง";
-  }
-}
-
-function download(file) {
-  const url = URL.createObjectURL(file);
-  const a = el("a", { href: url, download: file.name });
+function exportCsv() {
+  const rows = [["วันที่", "ประเภท", "จำนวนเงิน", "หมวด", "บันทึก", "ผู้บันทึก"]];
+  [...txs.values()].filter((t) => !t.deleted).sort((a, b) => a.date.localeCompare(b.date))
+    .forEach((t) => rows.push([t.date, t.type === "income" ? "รายรับ" : "รายจ่าย", (t.amount / 100).toFixed(2), t.category, t.note, t.member]));
+  const csv = "﻿" + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const file = new File([csv], `รายรับรายจ่าย-${today()}.csv`, { type: "text/csv" });
+  if (navigator.canShare?.({ files: [file] })) { navigator.share({ files: [file] }).catch(() => {}); return; }
+  const a = el("a", { href: URL.createObjectURL(file), download: file.name });
   document.body.append(a);
   a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
-async function buildZip() {
-  const files = await Promise.all(outputs.map(async (o) => ({ name: o.filename, data: new Uint8Array(await o.file.arrayBuffer()) })));
-  const lines = ["DeptFlow - สรุปการแยกไฟล์ตามแผนก", `ไฟล์ต้นฉบับ: ${total} หน้า`, ""];
-  for (const o of outputs) lines.push(`${o.name}: ${o.pages.length} หน้า`);
-  files.push({ name: "สรุป.txt", data: new TextEncoder().encode(lines.join("\r\n") + "\r\n") });
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return new File([makeZip(files)], `DeptFlow_${stamp}.zip`, { type: "application/zip" });
+function logout() {
+  const left = pending.size ? `\nยังมี ${pending.size} รายการที่ยังส่งไม่ได้ จะหายไปด้วย` : "";
+  if (!confirm(`ออกจากครอบครัวและลบข้อมูลในเครื่องนี้?${left}\n(ข้อมูลบนเซิร์ฟเวอร์ไม่ถูกลบ)`)) return;
+  Object.values(KEY).forEach((k) => { try { localStorage.removeItem(k); } catch { /* ไม่เป็นไร */ } });
+  location.reload();
 }
 
-async function saveZip() {
-  const zip = await buildZip();
-  if (IS_IOS) openShare(zip, "ทั้งหมด");
-  else download(zip);
+// ---------------------------------------------------------------- เริ่มทำงาน
+
+function shiftMonth(delta) {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  month = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  render();
 }
 
-// ---------------------------------------------------------------- ล้างข้อมูล
-
-async function closeDocument() {
-  renderObserver?.disconnect();
-  if (pdfDoc) await pdfDoc.destroy().catch(() => {});
-  pdfDoc = null;
-  srcBytes = null;
-  outputs = [];
-  pendingShare = [];
+function setView(v) {
+  view = v;
+  $("tab-list").classList.toggle("active", v === "list");
+  $("tab-cats").classList.toggle("active", v === "cats");
+  $("tab-list").setAttribute("aria-selected", String(v === "list"));
+  $("tab-cats").setAttribute("aria-selected", String(v === "cats"));
+  render();
 }
 
-async function resetAll(ask) {
-  if (ask && !confirm("ล้างเอกสารทั้งหมดออกจากแอป?")) return;
-  await closeDocument();
-  total = 0;
-  sourceName = "";
-  explicit = [];
-  origin = [];
-  groups = [];
-  $("page-list").replaceChildren();
-  $("auto-list").replaceChildren();
-  $("group-list").replaceChildren();
-  $("pv-canvas").width = 0;
-  showStep(1);
+function setCatType(type) {
+  catType = type;
+  $("cat-expense").classList.toggle("active", type === "expense");
+  $("cat-income").classList.toggle("active", type === "income");
+  render();
 }
 
-// ---------------------------------------------------------------- เชื่อมปุ่ม
+$("btn-prev").addEventListener("click", () => shiftMonth(-1));
+$("btn-next").addEventListener("click", () => shiftMonth(1));
+$("tab-list").addEventListener("click", () => setView("list"));
+$("tab-cats").addEventListener("click", () => setView("cats"));
+$("cat-expense").addEventListener("click", () => setCatType("expense"));
+$("cat-income").addEventListener("click", () => setCatType("income"));
+$("btn-add").addEventListener("click", () => openTx());
+$("type-expense").addEventListener("click", () => setFormType("expense"));
+$("type-income").addEventListener("click", () => setFormType("income"));
+$("f-cat-new").addEventListener("input", () => { formCat = ""; });
+$("tx-form").addEventListener("submit", saveTx);
+$("tx-cancel").addEventListener("click", () => $("tx-dialog").close());
+$("tx-delete").addEventListener("click", deleteTx);
+$("btn-settings").addEventListener("click", () => openSettings());
+$("set-cancel").addEventListener("click", () => $("set-dialog").close());
+$("set-save").addEventListener("click", saveSettings);
+$("btn-invite").addEventListener("click", invite);
+$("btn-export").addEventListener("click", exportCsv);
+$("btn-sync").addEventListener("click", () => sync().then(() => toast(pending.size ? "ยังส่งไม่ได้" : "ซิงก์แล้ว")));
+$("btn-logout").addEventListener("click", logout);
 
-$("file-input").addEventListener("change", (e) => openFile(e.target.files[0]));
-$("btn-split").addEventListener("click", buildOutputs);
-$("merge-save").addEventListener("click", addMergeRule);
-$("merge-add").addEventListener("toggle", () => { if ($("merge-add").open) renderMergePick(); });
-$("btn-skip").addEventListener("click", () => {
-  skipAuto = true;
-  setLoading("ข้ามการจัดกลุ่มอัตโนมัติ");
-});
-$("btn-edit").addEventListener("click", () => { showStep(2); observeThumbnails(); });
-$("btn-zip").addEventListener("click", saveZip);
-$("btn-share-all").addEventListener("click", shareAll);
-$("btn-new").addEventListener("click", () => resetAll(false));
-$("btn-new-2").addEventListener("click", () => resetAll(false));
-$("btn-clear").addEventListener("click", () => resetAll(true));
-$("btn-clear-2").addEventListener("click", () => resetAll(true));
-$("share-confirm").addEventListener("change", () => { $("share-go").disabled = !$("share-confirm").checked; });
-$("share-go").addEventListener("click", doShare);
-$("share-cancel").addEventListener("click", () => $("share-dialog").close());
-$("pv-close").addEventListener("click", () => $("preview-dialog").close());
-$("pv-prev").addEventListener("click", () => { if (viewer.index > 0) { viewer.index--; drawViewer(); } });
-$("pv-next").addEventListener("click", () => { if (viewer.index < viewer.pages.length - 1) { viewer.index++; drawViewer(); } });
+window.addEventListener("online", () => sync());
+document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
+setInterval(() => { if (!document.hidden) sync(); }, SYNC_EVERY);
 
-$("install-hint").hidden = !(IS_IOS && !navigator.standalone);
+/** เปิดจากลิงก์ชวน (#join=ที่อยู่เซิร์ฟเวอร์) */
+function takeJoin() {
+  const join = new URLSearchParams(location.hash.slice(1)).get("join");
+  if (!join) return false;
+  history.replaceState(null, "", location.pathname);
+  openSettings(join);
+  return true;
+}
+window.addEventListener("hashchange", takeJoin);
 
-// ใช้งานออฟไลน์ได้หลังเปิดครั้งแรก (เก็บเฉพาะไฟล์ของแอป ไม่เก็บเอกสาร)
+render();
+statusIdle();
+if (!takeJoin()) sync();
+
 if ("serviceWorker" in navigator && (location.protocol === "https:" || ["127.0.0.1", "localhost"].includes(location.hostname))) {
   const hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.register("sw.js").catch(() => {});
-  // มีรุ่นใหม่: โหลดหน้าใหม่ให้เอง (เฉพาะตอนยังไม่ได้เปิดไฟล์ งานที่ทำอยู่จะไม่หาย)
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (hadController && !pdfDoc) location.reload();
+    if (hadController && !document.querySelector("dialog[open]")) location.reload();
   });
 }

@@ -1,0 +1,11 @@
+# ใช้กับ wrangler (ถ้า deploy จากคอมพิวเตอร์) — ถ้าวางโค้ดใน Dashboard ไม่ต้องใช้ไฟล์นี้
+name = "family-money"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family-money"
+database_id = "d6c8f277-ac61-4c04-a854-d25bdc966df5"
+
+# รหัสครอบครัว: wrangler secret put FAMILY_PASSWORD (ห้ามเขียนรหัสในไฟล์นี้)

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:8787 http://localhost:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#F3FAFC">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="DeptFlow">
+  <meta name="apple-mobile-web-app-title" content="รายรับรายจ่าย">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <title>DeptFlow</title>
+  <title>รายรับรายจ่าย</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/favicon-64.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -19,166 +19,113 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <img class="logo" src="icons/icon-192.png" alt="" width="48" height="48">
+      <img class="logo" src="icons/icon-192.png" alt="" width="44" height="44">
       <div>
-        <h1>DeptFlow</h1>
-        <p>แยกไฟล์ PDF พนักงานตามแผนก</p>
+        <h1>รายรับรายจ่าย</h1>
+        <p id="sync-status" class="sync">ยังไม่เชื่อมต่อ · เก็บในเครื่อง</p>
       </div>
     </div>
-    <span class="badge-private">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-      ในเครื่องเท่านั้น
-    </span>
+    <button id="btn-settings" class="icon-btn" type="button" aria-label="ตั้งค่า">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
   </header>
 
   <main>
-    <ol class="steps" aria-label="ขั้นตอน">
-      <li id="step-dot-1" class="active">1 เลือกไฟล์</li>
-      <li id="step-dot-2">2 กำหนดแผนก</li>
-      <li id="step-dot-3">3 แชร์</li>
-    </ol>
+    <nav class="month-nav" aria-label="เลือกเดือน">
+      <button id="btn-prev" class="icon-btn" type="button" aria-label="เดือนก่อน">‹</button>
+      <h2 id="month-label"></h2>
+      <button id="btn-next" class="icon-btn" type="button" aria-label="เดือนถัดไป">›</button>
+    </nav>
 
-    <!-- ขั้นที่ 1 -->
-    <section id="step-upload">
-      <div class="card">
-        <h2>เลือกไฟล์ PDF รวม</h2>
-        <p class="helper">ไฟล์ถูกเปิดและแยกในมือถือเครื่องนี้ ไม่ถูกส่งไปที่ใด</p>
-        <label id="dropzone" class="dropzone" for="file-input">
-          <div class="icon-box blue" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-          </div>
-          <strong>แตะเพื่อเลือกไฟล์ PDF</strong>
-          <span class="helper">ใช้ได้ทั้งไฟล์ข้อความและไฟล์สแกน</span>
-          <input id="file-input" type="file" accept="application/pdf,.pdf">
-        </label>
-        <div id="loading" class="loading" hidden>
-          <div class="sorter" aria-hidden="true">
-            <span class="paper"></span><span class="paper"></span><span class="paper"></span>
-            <span class="folder f1"></span><span class="folder f2"></span><span class="folder f3"></span>
-          </div>
-          <span id="loading-text" class="loading-text">กำลังเปิดไฟล์</span>
-          <div class="load-bar" role="progressbar" aria-label="ความคืบหน้า"><div id="load-fill" class="load-fill"></div></div>
-        </div>
-        <button id="btn-skip" class="btn secondary small skip" type="button" hidden>ข้าม แล้วเลือกแผนกเอง</button>
-        <p id="upload-error" class="error" hidden></p>
-      </div>
-
-      <div id="install-hint" class="card soft" hidden>
-        <h3>ติดตั้งเป็นแอปบน iPhone</h3>
-        <p class="helper">แตะปุ่มแชร์ของ Safari แล้วเลือก <b>เพิ่มไปยังหน้าจอโฮม</b> หลังจากนั้นเปิดใช้ได้แม้ไม่มีอินเทอร์เน็ต</p>
-      </div>
+    <section class="summary" aria-label="สรุปเดือนนี้">
+      <div class="sum income"><span>รายรับ</span><b id="sum-income">0</b></div>
+      <div class="sum expense"><span>รายจ่าย</span><b id="sum-expense">0</b></div>
+      <div class="sum balance"><span>คงเหลือ</span><b id="sum-balance">0</b></div>
     </section>
 
-    <!-- ขั้นที่ 2 -->
-    <section id="step-assign" hidden>
-      <div class="section-head">
-        <h2>กำหนดแผนก</h2>
-        <p class="helper" id="assign-source"></p>
-      </div>
-      <datalist id="dept-options"></datalist>
+    <div class="tabs" role="tablist">
+      <button id="tab-list" class="tab active" type="button" role="tab" aria-selected="true">รายการ</button>
+      <button id="tab-cats" class="tab" type="button" role="tab" aria-selected="false">ตามหมวด</button>
+    </div>
 
-      <div id="auto-groups" class="card auto" hidden>
-        <h3>แผนกที่แอปจัดให้</h3>
-        <p class="helper" id="auto-summary"></p>
-        <p class="helper">แอปเทียบภาพช่องชื่อหน่วยงานของทุกหน้า หน้าที่เหมือนกันอยู่กลุ่มเดียวกัน (ไม่ได้อ่านตัวหนังสือ)</p>
-        <ol id="auto-list" class="auto-list"></ol>
-      </div>
-
-      <div id="merge-card" class="card merge">
-        <h3>รวมหลายแผนกเป็นไฟล์เดียว</h3>
-        <p class="helper">เช่น หัวหน้าแผนกขอไฟล์เดียวที่มีน้องทุกคน ติ๊กออกถ้าต้องการไฟล์แยกตามแผนก</p>
-        <ul id="merge-list" class="merge-list"></ul>
-        <details id="merge-add" class="merge-add">
-          <summary>+ เพิ่มการรวมไฟล์</summary>
-          <input id="merge-name" class="dept-input" type="text" list="dept-options" autocomplete="off"
-            autocapitalize="off" spellcheck="false" placeholder="ชื่อไฟล์รวม เช่น FSH-Bakery&amp;Delica" aria-label="ชื่อไฟล์รวม">
-          <p class="helper">เลือกแผนกที่จะรวม (อย่างน้อย 2)</p>
-          <div id="merge-pick" class="merge-pick"></div>
-          <button id="merge-save" class="btn secondary small" type="button">เพิ่ม</button>
-          <p id="merge-error" class="error" hidden></p>
-        </details>
-      </div>
-
-      <h3 class="list-title">ตรวจ / แก้ทีละหน้า</h3>
-      <div class="card tip">
-        ถ้าต้องแก้ ให้เลือกแผนกที่<b>หน้าแรกของแต่ละแผนก</b> หน้าถัดไปจะใช้แผนกเดียวกันจนกว่าจะเปลี่ยน · แตะภาพเพื่อดูทั้งหน้า
-      </div>
-      <ol id="page-list" class="page-list"></ol>
-      <div class="actions">
-        <button id="btn-new-2" class="btn secondary" type="button">เลือกไฟล์ใหม่</button>
-        <button id="btn-clear-2" class="btn danger-outline" type="button">ล้างข้อมูล</button>
-      </div>
-      <p id="split-error" class="error" hidden></p>
-      <div class="bottom-bar">
-        <div class="bottom-count">
-          <span id="assign-count">0 / 0</span>
-          <div class="progress"><div id="assign-fill" class="progress-fill"></div></div>
-        </div>
-        <button id="btn-split" class="btn primary" type="button">สร้างไฟล์</button>
-      </div>
+    <section id="view-list">
+      <div id="tx-list" class="tx-list"></div>
+      <p id="empty" class="empty" hidden>ยังไม่มีรายการในเดือนนี้ · แตะ <b>+</b> เพื่อเพิ่ม</p>
     </section>
 
-    <!-- ขั้นที่ 3 -->
-    <section id="step-result" hidden>
-      <div class="section-head">
-        <h2>ไฟล์แยกตามแผนก</h2>
-        <p class="helper" id="source-name"></p>
+    <section id="view-cats" hidden>
+      <div class="seg" role="group" aria-label="ประเภท">
+        <button id="cat-expense" class="seg-btn active" type="button">รายจ่าย</button>
+        <button id="cat-income" class="seg-btn" type="button">รายรับ</button>
       </div>
-      <div class="coverage" id="coverage"></div>
-      <div class="kpis">
-        <div class="kpi"><b id="kpi-pages">0</b><span>หน้า</span></div>
-        <div class="kpi"><b id="kpi-depts">0</b><span>แผนก</span></div>
-        <div class="kpi"><b id="kpi-review">0</b><span>รอตรวจสอบ</span></div>
-      </div>
-      <div class="share-all">
-        <button id="btn-share-all" class="btn primary" type="button" hidden>แชร์ทุกไฟล์ครั้งเดียว</button>
-        <p id="share-all-note" class="helper" hidden></p>
-      </div>
-      <div id="group-list" class="group-list"></div>
-      <div class="actions">
-        <button id="btn-zip" class="btn secondary" type="button">บันทึกทั้งหมด (ZIP)</button>
-        <button id="btn-edit" class="btn secondary" type="button">แก้แผนก</button>
-        <button id="btn-new" class="btn secondary" type="button">ไฟล์ใหม่</button>
-        <button id="btn-clear" class="btn danger-outline" type="button">ล้างข้อมูล</button>
-      </div>
+      <ol id="cat-list" class="cat-list"></ol>
+      <h3 class="sub">แยกตามคน</h3>
+      <ol id="member-list" class="cat-list"></ol>
     </section>
-
-    <p class="footnote">เอกสารอยู่ในหน่วยความจำของแอปเท่านั้น ถูกลบเมื่อกดล้างข้อมูลหรือปิดแอป</p>
   </main>
 
-  <!-- แชร์ -->
-  <dialog id="share-dialog" class="sheet">
-    <div class="sheet-body">
-      <h3 id="share-title">แชร์ไฟล์</h3>
-      <p class="helper">จะเปิดเมนูแชร์ของเครื่อง ให้คุณเลือก LINE กลุ่มและกดส่งเอง แอปไม่ส่งอะไรออกไปอัตโนมัติ</p>
-      <label class="check">
-        <input type="checkbox" id="share-confirm">
-        <span id="share-confirm-text">ยืนยันว่าปลายทางได้รับอนุญาตให้เข้าถึงข้อมูลพนักงานของแผนกนี้</span>
+  <button id="btn-add" class="fab" type="button" aria-label="เพิ่มรายการ">+</button>
+
+  <!-- เพิ่ม / แก้รายการ -->
+  <dialog id="tx-dialog" class="sheet">
+    <form id="tx-form" class="sheet-body" method="dialog" novalidate>
+      <h3 id="tx-title">เพิ่มรายการ</h3>
+      <div class="seg big" role="group" aria-label="ประเภท">
+        <button id="type-expense" class="seg-btn active expense" type="button">รายจ่าย</button>
+        <button id="type-income" class="seg-btn income" type="button">รายรับ</button>
+      </div>
+      <label class="field amount">
+        <span>จำนวนเงิน (บาท)</span>
+        <input id="f-amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required>
       </label>
-      <p id="share-list" class="share-list" hidden></p>
-      <p id="share-fallback" class="notice" hidden>เครื่องนี้แชร์ไฟล์โดยตรงไม่ได้ ให้ดาวน์โหลดไฟล์แล้วแนบใน LINE เอง</p>
-      <p id="share-status" class="helper"></p>
+      <div class="field">
+        <span>หมวด</span>
+        <div id="f-cats" class="chips"></div>
+        <input id="f-cat-new" type="text" maxlength="40" placeholder="หรือพิมพ์หมวดใหม่" autocomplete="off" hidden>
+      </div>
+      <div class="row2">
+        <label class="field"><span>วันที่</span><input id="f-date" type="date" required></label>
+        <label class="field"><span>ใครบันทึก</span><input id="f-member" type="text" maxlength="30" autocomplete="off"></label>
+      </div>
+      <label class="field"><span>บันทึกเพิ่ม</span><input id="f-note" type="text" maxlength="200" autocomplete="off" placeholder="เช่น ค่าข้าวกลางวัน"></label>
+      <p id="tx-error" class="error" hidden></p>
       <div class="sheet-actions">
-        <button id="share-cancel" type="button" class="btn secondary">ยกเลิก</button>
-        <button id="share-go" type="button" class="btn primary" disabled>เปิดเมนูแชร์</button>
+        <button id="tx-delete" class="btn danger-outline" type="button" hidden>ลบ</button>
+        <button id="tx-cancel" class="btn secondary" type="button">ยกเลิก</button>
+        <button id="tx-save" class="btn primary" type="submit">บันทึก</button>
       </div>
+    </form>
+  </dialog>
+
+  <!-- ตั้งค่า -->
+  <dialog id="set-dialog" class="sheet">
+    <div class="sheet-body">
+      <h3>เชื่อมต่อครอบครัว</h3>
+      <p class="helper">ทุกคนในครอบครัวใส่ที่อยู่เซิร์ฟเวอร์และรหัสครอบครัวเดียวกัน ข้อมูลจะตรงกันทุกเครื่อง</p>
+      <label class="field"><span>ที่อยู่เซิร์ฟเวอร์ (Cloudflare Worker)</span>
+        <input id="s-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://family-money.xxx.workers.dev"></label>
+      <label class="field"><span>รหัสครอบครัว</span>
+        <input id="s-pass" type="password" autocomplete="current-password"></label>
+      <label class="field"><span>ชื่อของฉัน (แสดงในรายการ)</span>
+        <input id="s-member" type="text" maxlength="30" autocomplete="off" placeholder="เช่น พ่อ, แม่, น้อง"></label>
+      <p id="set-msg" class="helper"></p>
+      <div class="sheet-actions">
+        <button id="set-cancel" class="btn secondary" type="button">ปิด</button>
+        <button id="set-save" class="btn primary" type="button">บันทึกและเชื่อมต่อ</button>
+      </div>
+      <hr>
+      <div class="tools">
+        <button id="btn-invite" class="btn secondary small" type="button">ส่งลิงก์ชวนครอบครัว</button>
+        <button id="btn-export" class="btn secondary small" type="button">ส่งออก CSV</button>
+        <button id="btn-sync" class="btn secondary small" type="button">ซิงก์ตอนนี้</button>
+        <button id="btn-logout" class="btn danger-outline small" type="button">ออกจากครอบครัวในเครื่องนี้</button>
+      </div>
+      <p class="helper small">ลิงก์ชวนมีเฉพาะที่อยู่เซิร์ฟเวอร์ ไม่มีรหัส ให้บอกรหัสครอบครัวกันเอง</p>
     </div>
   </dialog>
 
-  <!-- ดูหน้า -->
-  <dialog id="preview-dialog" class="viewer">
-    <div class="viewer-bar">
-      <button id="pv-close" type="button" class="btn secondary small">ปิด</button>
-      <span id="pv-title"></span>
-      <div class="viewer-nav">
-        <button id="pv-prev" type="button" class="btn secondary small" aria-label="หน้าก่อน">‹</button>
-        <button id="pv-next" type="button" class="btn secondary small" aria-label="หน้าถัดไป">›</button>
-      </div>
-    </div>
-    <div class="viewer-body"><canvas id="pv-canvas"></canvas></div>
-  </dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
 
-  <script src="vendor/pdf-lib.min.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

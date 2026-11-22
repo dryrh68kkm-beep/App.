@@ -1,278 +1,140 @@
-"""ทดสอบแอปมือถือครบขั้นตอนในเบราว์เซอร์ ด้วย PDF จำลองเท่านั้น (ห้ามใช้ไฟล์จริงในเทสต์นี้)
+"""ทดสอบแอปรายรับรายจ่าย 2 เครื่อง (ข้อมูลจำลองเท่านั้น)
 
-วิธีรัน (ในเครื่อง):
-    pip install pymupdf playwright
+    node tests/dev_worker.mjs                         # Worker จำลอง พอร์ต 8787 รหัส test-pass
     python -m http.server 8800 --bind 127.0.0.1      # รันที่โฟลเดอร์หลักของ repo
     python tests/e2e_test.py
-
-สิ่งที่ตรวจ:
-- ไฟล์สแกน / ไฟล์ข้อความ / รายงานแบบ HRAL61X (ข้อมูลจำลอง)
-- ค่าแนะนำแผนกจาก PDF ที่มีข้อความ และไม่มีค่าแนะนำสำหรับไฟล์สแกน
-- กำหนดแผนกแบบ "ตามหน้าก่อน" → ครบทุกหน้า ไม่ซ้ำ
-- ปุ่มแชร์กดไม่ได้จนกว่าจะยืนยันกลุ่ม
-- ไฟล์ที่ส่งเข้าเมนูแชร์ (จำลอง) มีข้อความ/ภาพทุกหน้าเหมือนต้นฉบับ
-- ZIP เปิดได้ ครบทุกหน้า
-- ไม่มีคำขอไปเว็บภายนอก และไม่มี error
-- ใช้งานออฟไลน์ได้หลังเปิดครั้งแรก
 """
-import base64
-import hashlib
-import io
 import os
-import sys
-import tempfile
-import zipfile
-from pathlib import Path
 
-import pymupdf
 from playwright.sync_api import sync_playwright
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fake_pdf import FakeReport, make_report_pdf, report_pages, scanned_sample, text_sample  # noqa: E402
-
-URL = os.environ.get("DEPTFLOW_URL", "http://127.0.0.1:8800/")
-CHROMIUM = os.environ.get("CHROMIUM_PATH")  # ถ้าต้องการระบุเบราว์เซอร์เอง
-
-MOCK_SHARE = """
-window.__shared = [];
-navigator.canShare = (d) => !!(d && d.files && d.files.length);
-navigator.share = async (d) => {
-  for (const f of d.files) {
-    const b = new Uint8Array(await f.arrayBuffer());
-    let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
-    window.__shared.push({name: f.name, type: f.type, b64: btoa(s)});
-  }
-};
-"""
+URL = os.environ.get("APP_URL", "http://127.0.0.1:8800/")
+API = os.environ.get("API_URL", "http://127.0.0.1:8787")
+CHROMIUM = os.environ.get("CHROMIUM_PATH")
 
 
-def fingerprint(doc, page):
-    h = hashlib.sha256(page.get_text("text").encode())
-    for img in page.get_images(full=True):
-        h.update(doc.extract_image(img[0])["image"])
-    h.update(repr(tuple(round(v, 1) for v in page.rect)).encode())
-    return h.hexdigest()
+def device(browser, errors):
+    ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    page = ctx.new_page()
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "401" not in m.text and "INTERNET_DISCONNECTED" not in m.text else None)
+    page.goto(URL)
+    return ctx, page
 
 
-def run_case(browser, name, pdf_bytes, starts, expect_prefill):
-    errors, external = [], []
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / f"{name}.pdf"
-        path.write_bytes(pdf_bytes)
-        ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
-        ctx.add_init_script(MOCK_SHARE)
-        page = ctx.new_page()
-        page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
-        page.on("request", lambda r: external.append(r.url) if not r.url.startswith((URL.rstrip("/"), "blob:", "data:")) else None)
-        page.goto(URL)
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        total = page.locator(".page-row").count()
-        prefill = [page.input_value(f'.dept-input[data-i="{i}"]') for i in range(total)]
-        assert [p for p in prefill if p] == expect_prefill, (name, prefill)
-        for pno, dept in starts.items():
-            page.fill(f'.dept-input[data-i="{pno - 1}"]', dept)
-        page.click("#btn-split")
-        page.wait_for_selector("#step-result:not([hidden])", timeout=60000)
-        coverage = page.inner_text("#coverage")
-        assert coverage.startswith("✓"), coverage
-        n = page.locator("#group-list article").count()
-        for k in range(n):
-            page.click(f'#group-list article[data-k="{k}"] .btn.teal')
-            page.wait_for_selector("#share-dialog[open]")
-            assert page.is_disabled("#share-go"), "ปุ่มแชร์ต้องกดไม่ได้ก่อนยืนยัน"
-            page.check("#share-confirm")
-            page.click("#share-go")
-            page.wait_for_timeout(300)
-        shared = page.locator("body").evaluate("() => window.__shared")
-        ctx.close()
-
-    src = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    out = []
-    for s in shared:
-        d = pymupdf.open(stream=base64.b64decode(s["b64"]), filetype="pdf")
-        out += [fingerprint(d, pg) for pg in d]
-    assert sorted(out) == sorted(fingerprint(src, pg) for pg in src), f"{name}: เนื้อหาไม่ตรงต้นฉบับ"
-    assert not external, external
-    assert not errors, errors
-    print(f"✓ {name}: {total} หน้า {n} ไฟล์ {coverage}")
+def add(page, kind, amount, cat, note=""):
+    page.click("#btn-add")
+    page.click(f"#type-{kind}")
+    page.fill("#f-amount", amount)
+    if page.locator(f'#f-cats .chip:text-is("{cat}")').count():
+        page.click(f'#f-cats .chip:text-is("{cat}")')
+    else:
+        page.click("#f-cats .chip.add")
+        page.fill("#f-cat-new", cat)
+    page.fill("#f-note", note)
+    page.click("#tx-save")
+    page.wait_for_selector("#tx-dialog[open]", state="detached")
 
 
-def run_zip_and_offline(browser):
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "scan.pdf"
-        path.write_bytes(scanned_sample())
-        ctx = browser.new_context(viewport={"width": 390, "height": 844})
-        ctx.add_init_script(MOCK_SHARE + "Object.defineProperty(navigator,'userAgent',{get:()=>'iPhone'});")
-        page = ctx.new_page()
-        page.goto(URL)
-        page.wait_for_timeout(2000)
-        page.reload()
-        ctx.set_offline(True)
-        page.reload()
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        page.fill('.dept-input[data-i="0"]', "A")
-        page.fill('.dept-input[data-i="2"]', "B")
-        page.fill('.dept-input[data-i="4"]', "B")  # หน้า 5 เป็นกลุ่มใหม่จากภาพ ต้องใส่ชื่อด้วย
-        page.click("#btn-split")
-        page.wait_for_selector("#step-result:not([hidden])")
-        page.click("#btn-zip")
-        page.wait_for_selector("#share-dialog[open]")
-        page.check("#share-confirm")
-        page.click("#share-go")
-        page.wait_for_timeout(500)
-        shared = page.locator("body").evaluate("() => window.__shared")
-        ctx.close()
-    z = zipfile.ZipFile(io.BytesIO(base64.b64decode(shared[0]["b64"])))
-    assert z.testzip() is None
-    assert sorted(z.namelist()) == ["A.pdf", "B.pdf", "สรุป.txt"], z.namelist()
-    pages = sum(pymupdf.open(stream=z.read(n), filetype="pdf").page_count for n in z.namelist() if n.endswith(".pdf"))
-    assert pages == 5
-    print("✓ ZIP + ใช้งานออฟไลน์")
+def connect(page, name, password="test-pass"):
+    page.click("#btn-settings")
+    page.fill("#s-url", API)
+    page.fill("#s-pass", password)
+    page.fill("#s-member", name)
+    page.click("#set-save")
 
 
-def run_auto_group(browser):
-    """จัดแผนกอัตโนมัติจากภาพ: รอบแรกตั้งชื่อกลุ่ม รอบสองแอปต้องจำได้เอง"""
-    names = ["DRY-DryFood", "FSH-Produce", "FSH-Seafood"]
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "scan.pdf"
-        path.write_bytes(scanned_sample())
-        ctx = browser.new_context(viewport={"width": 390, "height": 844})
-        ctx.add_init_script(MOCK_SHARE)
-        page = ctx.new_page()
-        page.goto(URL)
-
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        assert page.locator(".auto-row").count() == 3, "ต้องแยกได้ 3 กลุ่ม"
-        assert "ระบุแล้ว 0/5" in page.inner_text("#assign-count"), "ข้อมูลจำลองต้องไม่ถูกเดาชื่อจากลายเส้นที่รู้จัก"
-        for k, name in enumerate(names):
-            page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
-        # แอปรวบการอัปเดตตอนพิมพ์ไว้ครู่หนึ่ง (กันค้างกับไฟล์หลายร้อยหน้า)
-        page.wait_for_selector('#assign-count:has-text("ระบุแล้ว 5/5")', timeout=5000)
-        page.click("#btn-split")
-        page.wait_for_selector("#step-result:not([hidden])")
-        page.click("#btn-new")
-
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        got = [page.input_value(f'.auto-row[data-k="{k}"] .dept-input') for k in range(3)]
-        assert got == names, got
-        assert "ระบุแล้ว 5/5" in page.inner_text("#assign-count")
-        ctx.close()
-    print("✓ จัดแผนกอัตโนมัติ + จำชื่อได้ครั้งต่อไป")
-
-
-def run_share_all(browser):
-    """แชร์ทุกไฟล์ครั้งเดียว: ต้องยืนยันก่อน และส่ง PDF แยกตามแผนกครบทุกไฟล์ในการแชร์ครั้งเดียว"""
-    data = scanned_sample()
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "scan.pdf"
-        path.write_bytes(data)
-        ctx = browser.new_context(viewport={"width": 390, "height": 844})
-        ctx.add_init_script(MOCK_SHARE + "window.__calls = 0; const _s = navigator.share; navigator.share = async (d) => { window.__calls++; return _s(d); };")
-        page = ctx.new_page()
-        page.goto(URL)
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        for k, name in enumerate(["DRY-DryFood", "FSH-Produce", "DRY-Snack"]):
-            page.fill(f'.auto-row[data-k="{k}"] .dept-input', name)
-        page.click("#btn-split")
-        page.wait_for_selector("#step-result:not([hidden])")
-        assert "3 ไฟล์" in page.inner_text("#btn-share-all")
-        page.click("#btn-share-all")
-        page.wait_for_selector("#share-dialog[open]")
-        assert page.is_disabled("#share-go"), "ต้องยืนยันก่อนแชร์"
-        assert "ทุกแผนก" in page.inner_text("#share-confirm-text")
-        page.check("#share-confirm")
-        page.click("#share-go")
-        page.wait_for_timeout(500)
-        shared = page.locator("body").evaluate("() => window.__shared")
-        calls = page.locator("body").evaluate("() => window.__calls")
-        ctx.close()
-    assert calls == 1, calls
-    assert [s["name"] for s in shared] == ["DRY-DryFood.pdf", "FSH-Produce.pdf", "DRY-Snack.pdf"], [s["name"] for s in shared]
-    src = pymupdf.open(stream=data, filetype="pdf")
-    out = []
-    for s in shared:
-        d = pymupdf.open(stream=base64.b64decode(s["b64"]), filetype="pdf")
-        out += [fingerprint(d, pg) for pg in d]
-    assert sorted(out) == sorted(fingerprint(src, pg) for pg in src)
-    print("✓ แชร์ทุกไฟล์ครั้งเดียว (3 PDF ในการแชร์ครั้งเดียว)")
-
-
-def run_merge(browser):
-    """รวมหลายแผนกเป็นไฟล์เดียว: ค่าเริ่มต้น Butchery + Seafood + Butchery&SeaFood, ปิดได้ และเพิ่มเองได้"""
-    code = "010-200-999-{}-000-000"
-    data = make_report_pdf([
-        FakeReport("9900001", "DEMO01:FSH-Butchery", code.format("020-010"), page_no=1),
-        FakeReport("9900002", "DEMO01:FSH-Produce", code.format("020-030"), page_no=2),
-        FakeReport("9900003", "DEMO01:FSH-Seafood", code.format("020-020"), page_no=3),
-        FakeReport("9900004", "DEMO01:FSH-Butchery&SeaFood", code.format("020-040"), page_no=4),
-        FakeReport("9900005", "DEMO01:FSH-Delica", code.format("020-050"), page_no=5),
-    ])
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "merge.pdf"
-        path.write_bytes(data)
-        ctx = browser.new_context(viewport={"width": 390, "height": 844})
-        page = ctx.new_page()
-        page.goto(URL)
-
-        def build():
-            page.set_input_files("#file-input", str(path))
-            page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-            page.click("#btn-split")
-            page.wait_for_selector("#step-result:not([hidden])")
-            result = {h.inner_text(): page.inner_text(f'#group-list article[data-k="{k}"] .helper')
-                      for k, h in enumerate(page.locator("#group-list h3").all())}
-            page.click("#btn-new")
-            return result
-
-        got = build()
-        assert list(got) == ["FSH-Butchery&SeaFood", "FSH-Produce", "FSH-Bakery&Delica"], got
-        assert got["FSH-Butchery&SeaFood"].startswith("3 หน้า · หน้า 1, 3-4"), got
-
-        # ติ๊กออก = ไฟล์แยกตามแผนกเหมือนเดิม
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        assert "ไฟล์นี้ 3 หน้า" in page.inner_text("#merge-list")
-        for box in page.locator("#merge-list input[type=checkbox]").all():
-            box.uncheck()
-        page.click("#btn-new-2")
-        got = build()
-        assert list(got) == ["FSH-Butchery", "FSH-Produce", "FSH-Seafood", "FSH-Butchery&SeaFood", "FSH-Delica"], got
-
-        # เพิ่มการรวมเอง
-        page.set_input_files("#file-input", str(path))
-        page.wait_for_selector("#step-assign:not([hidden])", timeout=60000)
-        page.click("#merge-add summary")
-        page.fill("#merge-name", "FF-Team")
-        page.check('#merge-pick input[value="FSH-Produce"]')
-        page.check('#merge-pick input[value="FSH-Delica"]')
-        page.click("#merge-save")
-        assert page.locator("#merge-list li").count() == 5
-        page.click("#btn-new-2")
-        got = build()
-        assert list(got)[:2] == ["FSH-Butchery", "FF-Team"] and len(got) == 4, got
-        ctx.close()
-    print("✓ รวมหลายแผนกเป็นไฟล์เดียว")
+def sync(page):
+    page.click("#btn-settings")
+    page.click("#btn-sync")
+    page.wait_for_timeout(600)
+    page.click("#set-cancel")
 
 
 def main():
+    errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROMIUM) if CHROMIUM else p.chromium.launch()
-        run_case(browser, "scanned", scanned_sample(), {1: "DRY-DryFood", 3: "FSH-Produce", 5: "FSH-Seafood"}, [])
-        run_case(browser, "report-text", make_report_pdf(report_pages()), {},
-                 ["DRY-DryFood", "FSH-Produce", "FSH-Seafood"])
-        data, _ = text_sample()
-        run_case(browser, "text", data, {}, ["แผนกจำลอง ก", "แผนกจำลอง ข", "แผนกจำลอง ค"])
-        run_auto_group(browser)
-        run_share_all(browser)
-        run_merge(browser)
-        run_zip_and_offline(browser)
+        ctx_a, a = device(browser, errors)
+        ctx_b, b = device(browser, errors)
+
+        # เครื่อง A ใช้แบบไม่เชื่อมต่อก่อน
+        assert "ยังไม่เชื่อมต่อ" in a.inner_text("#sync-status")
+        add(a, "income", "25,000", "เงินเดือน")
+        add(a, "expense", "120.50", "อาหาร", "ข้าวเที่ยง (จำลอง)")
+        add(a, "expense", "80", "ค่าขนมแมว")  # หมวดใหม่
+        assert a.inner_text("#sum-income") == "25,000", a.inner_text("#sum-income")
+        assert a.inner_text("#sum-expense") == "200.5", a.inner_text("#sum-expense")
+        assert a.inner_text("#sum-balance") == "24,799.5"
+
+        # รหัสผิด
+        connect(a, "พ่อ", "wrong")
+        a.wait_for_selector('#set-msg:has-text("ไม่ถูกต้อง")', timeout=5000)
+        a.click("#set-cancel")
+
+        # เชื่อมต่อ A แล้วรายการเดิมต้องขึ้นเซิร์ฟเวอร์
+        connect(a, "พ่อ")
+        a.wait_for_selector("#set-dialog[open]", state="detached", timeout=8000)
+        assert "ซิงก์แล้ว" in a.inner_text("#sync-status"), a.inner_text("#sync-status")
+
+        # B เปิดลิงก์ชวน แล้วใส่รหัส
+        b.goto(f"{URL}#join={API}")
+        b.wait_for_selector("#set-dialog[open]")
+        assert b.input_value("#s-url") == API
+        b.fill("#s-pass", "test-pass")
+        b.fill("#s-member", "แม่")
+        b.click("#set-save")
+        b.wait_for_selector("#set-dialog[open]", state="detached", timeout=8000)
+        assert b.inner_text("#sum-balance") == "24,799.5", b.inner_text("#sum-balance")
+
+        # B เพิ่มและแก้ A ต้องเห็น
+        add(b, "expense", "1,500", "น้ำ-ไฟ-เน็ต")
+        b.click('.tx:has-text("ค่าขนมแมว")')
+        b.fill("#f-amount", "100")
+        b.click("#tx-save")
+        b.wait_for_timeout(500)
+        sync(a)
+        assert a.inner_text("#sum-expense") == "1,720.5", a.inner_text("#sum-expense")
+        assert "แม่" in a.inner_text("#tx-list")
+
+        # A ออฟไลน์ เพิ่มรายการ → รอส่ง → กลับมาออนไลน์ส่งเอง
+        ctx_a.set_offline(True)
+        add(a, "expense", "60", "เดินทาง")
+        a.wait_for_selector('#sync-status:has-text("รอส่ง 1")', timeout=5000)
+        ctx_a.set_offline(False)
+        a.evaluate("dispatchEvent(new Event('online'))")
+        a.wait_for_selector('#sync-status:has-text("ซิงก์แล้ว")', timeout=5000)
+
+        # ลบที่ A แล้ว B ต้องหาย
+        a.once("dialog", lambda d: d.accept())
+        a.click('.tx:has-text("เดินทาง")')
+        a.click("#tx-delete")
+        a.wait_for_timeout(500)
+        sync(b)
+        assert "เดินทาง" not in b.inner_text("#tx-list")
+        assert b.inner_text("#sum-expense") == "1,720.5", b.inner_text("#sum-expense")
+
+        # มุมมองตามหมวด
+        b.click("#tab-cats")
+        assert "น้ำ-ไฟ-เน็ต" in b.inner_text("#cat-list")
+        assert "แม่" in b.inner_text("#member-list")
+
+        # เปิดใหม่แบบออฟไลน์ยังเห็นข้อมูล
+        a.reload()
+        ctx_a.set_offline(True)
+        a.reload()
+        assert a.inner_text("#sum-expense") == "1,720.5"
+        ctx_a.set_offline(False)
+
+        # ส่งออก CSV
+        b.click("#btn-settings")
+        with b.expect_download() as d:
+            b.click("#btn-export")
+        csv = open(d.value.path(), encoding="utf-8-sig").read()
+        assert csv.count("\n") == 4 and "น้ำ-ไฟ-เน็ต" in csv, csv
+
         browser.close()
+    assert not errors, errors
     print("ผ่านทั้งหมด")
 
 
