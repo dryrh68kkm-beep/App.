@@ -6,6 +6,13 @@ import worker from "../worker/worker.js";
 
 const sqlite = new DatabaseSync(":memory:");
 // ไม่สร้างตารางล่วงหน้า: Worker ต้องสร้างเอง (ensureSchema)
+// OLD_SCHEMA=1 จำลองฐานข้อมูลรุ่นแรก (ไม่มี debt_id / ตาราง debt) เพื่อทดสอบการอัปเกรด
+if (process.env.OLD_SCHEMA) {
+  sqlite.exec(`CREATE TABLE tx (id TEXT PRIMARY KEY, date TEXT NOT NULL, type TEXT NOT NULL CHECK (type IN ('income','expense')),
+    amount INTEGER NOT NULL, category TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', member TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO tx VALUES ('oldrow0001','2026-01-05','expense',5000,'อาหาร','','',1,1,0);`);
+}
 
 // ตัวแทน D1 แบบย่อ (prepare/bind/all/run/batch)
 const DB = {

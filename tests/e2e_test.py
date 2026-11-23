@@ -119,11 +119,45 @@ def main():
         assert "น้ำ-ไฟ-เน็ต" in b.inner_text("#cat-list")
         assert "แม่" in b.inner_text("#member-list")
 
+        # หนี้สิน: ย้ายรายการที่เป็นยอดหนี้ทั้งก้อนไปหนี้สิน แล้วผ่อนด้วยรายจ่ายที่ตัดยอดหนี้
+        b.click("#tab-list")
+        add(b, "expense", "1,000,000", "บ้าน/ค่าเช่า", "สินเชื่อบ้าน (จำลอง)")
+        assert b.inner_text("#sum-expense") == "1,001,720.5", b.inner_text("#sum-expense")
+        b.once("dialog", lambda d: d.accept())
+        b.click('.tx:has-text("สินเชื่อบ้าน")')
+        b.click("#tx-to-debt")
+        b.wait_for_selector("#tx-dialog[open]", state="detached")
+        assert b.inner_text("#sum-expense") == "1,720.5", b.inner_text("#sum-expense")
+        assert b.inner_text("#sum-debt") == "1,000,000"
+        b.click("#tab-debt")
+        b.click("#btn-add-debt")
+        b.fill("#d-name", "บัตรเครดิต (จำลอง)")
+        b.fill("#d-principal", "20000")
+        b.click("#debt-form button[type=submit]")
+        b.wait_for_selector("#debt-dialog[open]", state="detached")
+        assert b.inner_text("#debt-total") == "1,020,000", b.inner_text("#debt-total")
+        b.click("#btn-add")
+        b.click("#type-expense")
+        b.fill("#f-amount", "5000")
+        b.click('#f-cats .chip:text-is("ผ่อน/หนี้")')
+        b.select_option("#f-debt", label="บัตรเครดิต (จำลอง) (เหลือ 20,000)")
+        b.click("#tx-save")
+        b.wait_for_selector("#tx-dialog[open]", state="detached")
+        b.click("#tab-debt")
+        assert b.inner_text("#debt-total") == "1,015,000", b.inner_text("#debt-total")
+        assert "จ่ายแล้ว 5,000" in b.inner_text("#debt-list")
+        sync(a)
+        a.click("#tab-debt")
+        assert a.inner_text("#debt-total") == "1,015,000", a.inner_text("#debt-total")
+        assert a.inner_text("#sum-expense") == "6,720.5", a.inner_text("#sum-expense")
+        b.click("#tab-list")
+
         # เปิดใหม่แบบออฟไลน์ยังเห็นข้อมูล
         a.reload()
         ctx_a.set_offline(True)
         a.reload()
-        assert a.inner_text("#sum-expense") == "1,720.5"
+        assert a.inner_text("#sum-expense") == "6,720.5"
+        assert a.inner_text("#sum-debt") == "1,015,000"
         ctx_a.set_offline(False)
 
         # ส่งออก CSV
@@ -131,7 +165,7 @@ def main():
         with b.expect_download() as d:
             b.click("#btn-export")
         csv = open(d.value.path(), encoding="utf-8-sig").read()
-        assert csv.count("\n") == 4 and "น้ำ-ไฟ-เน็ต" in csv, csv
+        assert "น้ำ-ไฟ-เน็ต" in csv and "บัตรเครดิต (จำลอง)" in csv and "15000.00" in csv, csv
 
         browser.close()
     assert not errors, errors

@@ -2,7 +2,11 @@
 // ใช้ได้แม้ไม่มีเน็ต รายการที่ยังส่งไม่ได้จะส่งเองเมื่อกลับมาออนไลน์
 
 const $ = (id) => document.getElementById(id);
-const KEY = { tx: "money.tx", pending: "money.pending", cfg: "money.cfg", pull: "money.lastPull", cats: "money.cats" };
+const KEY = {
+  tx: "money.tx", pending: "money.pending", pull: "money.lastPull",
+  debt: "money.debt", pendingDebt: "money.pendingDebt", pullDebt: "money.lastPullDebt",
+  cfg: "money.cfg", cats: "money.cats",
+};
 const DEFAULT_CATS = {
   expense: ["อาหาร", "เดินทาง", "บ้าน/ค่าเช่า", "น้ำ-ไฟ-เน็ต", "ของใช้", "ลูก/การศึกษา", "สุขภาพ", "ผ่อน/หนี้", "ช้อปปิ้ง", "อื่น ๆ"],
   income: ["เงินเดือน", "ค่าล่วงเวลา", "ขายของ", "โบนัส", "ดอกเบี้ย/ปันผล", "อื่น ๆ"],
@@ -24,12 +28,27 @@ function write(key, value) {
 
 const txs = new Map(read(KEY.tx, []).map((t) => [t.id, t]));
 const pending = new Set(read(KEY.pending, []));
+const debts = new Map(read(KEY.debt, []).map((d) => [d.id, d]));
+const pendingDebt = new Set(read(KEY.pendingDebt, []));
 let cfg = read(KEY.cfg, { url: "", pass: "", member: "" });
 let customCats = read(KEY.cats, { expense: [], income: [] });
 
 function persist() {
   write(KEY.tx, [...txs.values()]);
   write(KEY.pending, [...pending]);
+  write(KEY.debt, [...debts.values()]);
+  write(KEY.pendingDebt, [...pendingDebt]);
+}
+
+/** หนี้ที่ยังไม่ลบ พร้อมยอดจ่ายแล้ว / คงเหลือ (คงเหลือ = ตั้งต้น − รายจ่ายที่ตัดยอดหนี้นี้) */
+function debtRows() {
+  const paid = new Map();
+  for (const t of txs.values()) {
+    if (!t.deleted && t.type === "expense" && t.debt_id) paid.set(t.debt_id, (paid.get(t.debt_id) || 0) + t.amount);
+  }
+  return [...debts.values()].filter((d) => !d.deleted)
+    .map((d) => ({ ...d, paid: paid.get(d.id) || 0, left: Math.max(0, d.principal - (paid.get(d.id) || 0)) }))
+    .sort((a, b) => b.left - a.left);
 }
 
 // ---------------------------------------------------------------- ตัวช่วย
@@ -90,10 +109,35 @@ function render() {
   $("sum-expense").textContent = baht(exp);
   $("sum-balance").textContent = baht(inc - exp);
   $("sum-balance").parentElement.classList.toggle("neg", inc - exp < 0);
-  $("view-list").hidden = view !== "list";
-  $("view-cats").hidden = view !== "cats";
+  const rows = debtRows();
+  $("sum-debt-card").hidden = rows.length === 0;
+  $("sum-debt").textContent = baht(rows.reduce((s, d) => s + d.left, 0));
+  for (const v of ["list", "cats", "debt"]) {
+    $(`view-${v}`).hidden = view !== v;
+    $(`tab-${v}`).classList.toggle("active", view === v);
+    $(`tab-${v}`).setAttribute("aria-selected", String(view === v));
+  }
   if (view === "list") renderList(items);
-  else renderCats(items);
+  else if (view === "cats") renderCats(items);
+  else renderDebts(rows);
+}
+
+function renderDebts(rows) {
+  const total = rows.reduce((s, d) => s + d.left, 0);
+  $("debt-total").textContent = baht(total);
+  $("debt-count").textContent = rows.length ? `${rows.length} รายการ · จ่ายไปแล้วรวม ${baht(rows.reduce((s, d) => s + d.paid, 0))}` : "";
+  $("debt-empty").hidden = rows.length > 0;
+  $("debt-list").replaceChildren(...rows.map((d) => {
+    const pct = d.principal ? Math.min(100, (d.paid / d.principal) * 100) : 0;
+    const fill = el("div", { class: "bar-fill" });
+    fill.style.width = `${Math.max(pct, 1)}%`;
+    return el("li", {},
+      el("button", { class: `debt-item${d.left === 0 ? " done" : ""}`, type: "button", onclick: () => openDebt(d) },
+        el("div", { class: "bar-head" }, el("b", { text: d.name }), el("b", { class: "debt-left", text: d.left === 0 ? "ปิดแล้ว ✓" : baht(d.left) })),
+        el("div", { class: "bar-track" }, fill),
+        el("small", { text: `ยอดตั้งต้น ${baht(d.principal)} · จ่ายแล้ว ${baht(d.paid)} (${Math.round(pct)}%)${d.note ? ` · ${d.note}` : ""}` }),
+        cfg.url && pendingDebt.has(d.id) ? el("span", { class: "wait", title: "รอส่ง", text: "•" }) : null));
+  }));
 }
 
 function renderList(items) {
@@ -113,7 +157,7 @@ function renderList(items) {
         el("span", { class: "dot", "aria-hidden": "true" }),
         el("span", { class: "tx-main" },
           el("b", { text: t.category }),
-          el("small", { text: [t.note, t.member].filter(Boolean).join(" · ") || " " })),
+          el("small", { text: [t.debt_id && debts.get(t.debt_id) ? `ตัดหนี้: ${debts.get(t.debt_id).name}` : "", t.note, t.member].filter(Boolean).join(" · ") || " " })),
         el("span", { class: "tx-amt", text: `${t.type === "income" ? "+" : "−"}${baht(t.amount)}` }),
         cfg.url && pending.has(t.id) ? el("span", { class: "wait", title: "รอส่ง", text: "•" }) : null)));
   }));
@@ -159,6 +203,16 @@ function setFormType(type) {
   $("tx-form").dataset.type = type;
   if (!catsFor(type).includes(formCat)) formCat = "";
   renderChips();
+  $("f-debt-field").hidden = type !== "expense" || debtRows().length === 0;
+  $("tx-to-debt").hidden = !editing || type !== "expense";
+}
+
+function fillDebtOptions(selected) {
+  const rows = debtRows();
+  if (selected && !rows.some((d) => d.id === selected) && debts.get(selected)) rows.push({ ...debts.get(selected), left: 0 });
+  $("f-debt").replaceChildren(el("option", { value: "", text: "ไม่ตัดยอดหนี้" }),
+    ...rows.map((d) => el("option", { value: d.id, text: `${d.name} (เหลือ ${baht(d.left)})` })));
+  $("f-debt").value = selected || "";
 }
 
 function renderChips() {
@@ -185,6 +239,7 @@ function openTx(t = null) {
   $("f-date").value = t ? t.date : (today().startsWith(month) ? today() : `${month}-01`);
   $("f-member").value = t ? t.member : cfg.member || "";
   $("f-note").value = t ? t.note : "";
+  fillDebtOptions(t?.debt_id || "");
   setFormType(t ? t.type : formType);
   $("tx-dialog").showModal();
   if (!t) setTimeout(() => $("f-amount").focus(), 50);
@@ -209,6 +264,7 @@ function saveTx(event) {
     date, type: formType, amount, category,
     note: $("f-note").value.trim().slice(0, 200),
     member: $("f-member").value.trim().slice(0, 30),
+    debt_id: formType === "expense" ? $("f-debt").value : "",
     updated_at: now, deleted: 0,
   };
   txs.set(t.id, t);
@@ -232,6 +288,73 @@ function deleteTx() {
   sync();
 }
 
+/** รายการที่บันทึกเป็นรายจ่ายแต่จริงๆ คือยอดหนี้ทั้งก้อน → ย้ายไปหนี้สิน */
+function txToDebt() {
+  if (!editing) return;
+  const amount = parseAmount($("f-amount").value) ?? editing.amount;
+  const note = $("f-note").value.trim();
+  const name = (formCat || $("f-cat-new").value || editing.category).trim() + (note ? ` · ${note}` : "");
+  if (!confirm(`ย้าย "${name}" ${baht(amount)} บาท ไปเป็นหนี้สิน?\nรายการนี้จะไม่นับเป็นรายจ่ายของเดือนอีก`)) return;
+  const now = Date.now();
+  const d = { id: newId(), name: name.slice(0, 60), principal: amount, note: "", member: editing.member, created_at: now, updated_at: now, deleted: 0 };
+  debts.set(d.id, d);
+  pendingDebt.add(d.id);
+  txs.set(editing.id, { ...editing, deleted: 1, updated_at: now });
+  pending.add(editing.id);
+  persist();
+  $("tx-dialog").close();
+  render();
+  toast("ย้ายไปหนี้สินแล้ว");
+  sync();
+}
+
+let editingDebt = null;
+
+function openDebt(d = null) {
+  editingDebt = d;
+  $("debt-title").textContent = d ? "แก้หนี้" : "เพิ่มหนี้";
+  $("debt-delete").hidden = !d;
+  $("debt-error").hidden = true;
+  $("d-name").value = d ? d.name : "";
+  $("d-principal").value = d ? String(d.principal / 100) : "";
+  $("d-note").value = d ? d.note : "";
+  $("d-paid").textContent = d ? `จ่ายแล้ว ${baht(d.paid)} · คงเหลือ ${baht(d.left)} (ตัดยอดเองเมื่อบันทึกรายจ่ายแล้วเลือกหนี้นี้)` : "บันทึกรายจ่ายแล้วเลือก \"ตัดยอดหนี้\" ยอดคงเหลือจะลดลงเอง";
+  $("debt-dialog").showModal();
+  if (!d) setTimeout(() => $("d-name").focus(), 50);
+}
+
+function saveDebt(event) {
+  event.preventDefault();
+  const fail = (msg) => { $("debt-error").textContent = msg; $("debt-error").hidden = false; };
+  const name = $("d-name").value.replace(/\s+/g, " ").trim().slice(0, 60);
+  if (!name) return fail("ใส่ชื่อหนี้ เช่น ผ่อนบ้าน");
+  const principal = parseAmount($("d-principal").value);
+  if (principal === null) return fail("ใส่ยอดหนี้ให้ถูกต้อง");
+  const now = Date.now();
+  const d = {
+    ...(editingDebt ? debts.get(editingDebt.id) : { id: newId(), created_at: now, member: cfg.member || "" }),
+    name, principal, note: $("d-note").value.trim().slice(0, 200), updated_at: now, deleted: 0,
+  };
+  debts.set(d.id, d);
+  pendingDebt.add(d.id);
+  persist();
+  $("debt-dialog").close();
+  render();
+  toast(editingDebt ? "แก้แล้ว" : "เพิ่มหนี้แล้ว");
+  sync();
+}
+
+function deleteDebt() {
+  if (!editingDebt || !confirm(`ลบหนี้ "${editingDebt.name}"?\nรายจ่ายที่เคยตัดยอดยังอยู่ในรายการตามเดิม`)) return;
+  debts.set(editingDebt.id, { ...debts.get(editingDebt.id), deleted: 1, updated_at: Date.now() });
+  pendingDebt.add(editingDebt.id);
+  persist();
+  $("debt-dialog").close();
+  render();
+  toast("ลบแล้ว");
+  sync();
+}
+
 // ---------------------------------------------------------------- ซิงก์
 
 let syncing = null;
@@ -243,7 +366,7 @@ function setStatus(text, kind = "") {
 
 function statusIdle() {
   if (!cfg.url || !cfg.pass) return setStatus("ยังไม่เชื่อมต่อ · เก็บในเครื่อง");
-  if (pending.size) return setStatus(`รอส่ง ${pending.size} รายการ`, "warn");
+  if (pending.size + pendingDebt.size) return setStatus(`รอส่ง ${pending.size + pendingDebt.size} รายการ`, "warn");
   setStatus(`ซิงก์แล้ว ${new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}`, "ok");
 }
 
@@ -267,28 +390,36 @@ function sync() {
   syncing = (async () => {
     setStatus("กำลังซิงก์…");
     try {
-      // 1) ส่งรายการที่แก้ในเครื่อง
-      const ids = [...pending];
-      for (let i = 0; i < ids.length; i += 500) {
-        const chunk = ids.slice(i, i + 500).map((id) => txs.get(id)).filter(Boolean);
-        await api("/api/tx", { method: "POST", body: JSON.stringify({ items: chunk }) });
-        chunk.forEach((t) => { if (txs.get(t.id)?.updated_at === t.updated_at) pending.delete(t.id); });
+      const parts = [
+        { path: "/api/tx", map: txs, wait: pending, pull: KEY.pull, nums: ["amount", "deleted", "created_at", "updated_at"] },
+        { path: "/api/debt", map: debts, wait: pendingDebt, pull: KEY.pullDebt, nums: ["principal", "deleted", "created_at", "updated_at"] },
+      ];
+      for (const part of parts) {
+        // 1) ส่งรายการที่แก้ในเครื่อง
+        const ids = [...part.wait];
+        for (let i = 0; i < ids.length; i += 500) {
+          const chunk = ids.slice(i, i + 500).map((id) => part.map.get(id)).filter(Boolean);
+          await api(part.path, { method: "POST", body: JSON.stringify({ items: chunk }) });
+          chunk.forEach((t) => { if (part.map.get(t.id)?.updated_at === t.updated_at) part.wait.delete(t.id); });
+          persist();
+        }
+        // 2) รับรายการที่คนอื่นแก้ (ย้อนเวลาเผื่อไว้ 5 วินาที)
+        const since = Math.max(0, read(part.pull, 0) - 5000);
+        const { items, now } = await api(`${part.path}?since=${since}`);
+        for (const t of items) {
+          if (part.wait.has(t.id)) continue; // ในเครื่องแก้ใหม่กว่า รอส่งก่อน
+          const row = { ...t };
+          part.nums.forEach((k) => { row[k] = Number(row[k]) || 0; });
+          part.map.set(t.id, row);
+        }
+        write(part.pull, now);
         persist();
       }
-      // 2) รับรายการที่คนอื่นแก้ (ย้อนเวลาเผื่อไว้ 5 วินาที)
-      const since = Math.max(0, read(KEY.pull, 0) - 5000);
-      const { items, now } = await api(`/api/tx?since=${since}`);
-      for (const t of items) {
-        if (pending.has(t.id)) continue; // ในเครื่องแก้ใหม่กว่า รอส่งก่อน
-        txs.set(t.id, { ...t, amount: Number(t.amount), deleted: Number(t.deleted) });
-      }
-      write(KEY.pull, now);
-      persist();
       statusIdle();
       render();
     } catch (e) {
       if (e.status === 401) setStatus("รหัสครอบครัวไม่ถูกต้อง", "bad");
-      else setStatus(`ออฟไลน์ · รอส่ง ${pending.size} รายการ`, "warn");
+      else setStatus(`ออฟไลน์ · รอส่ง ${pending.size + pendingDebt.size} รายการ`, "warn");
       throw e;
     } finally {
       syncing = null;
@@ -317,11 +448,14 @@ async function saveSettings() {
   cfg = { url, pass, member };
   write(KEY.cfg, cfg);
   if (!url || !pass) { $("set-msg").textContent = "บันทึกชื่อแล้ว (ยังไม่เชื่อมต่อ)"; statusIdle(); return; }
-  if (changedServer) write(KEY.pull, 0);
+  if (changedServer) { write(KEY.pull, 0); write(KEY.pullDebt, 0); }
   $("set-msg").textContent = "กำลังเชื่อมต่อ…";
   try {
     await api("/api/ping");
-    [...txs.keys()].forEach((id) => { if (changedServer) pending.add(id); }); // ส่งรายการเดิมในเครื่องขึ้นไปด้วย
+    if (changedServer) { // ส่งรายการเดิมในเครื่องขึ้นไปด้วย
+      txs.forEach((_, id) => pending.add(id));
+      debts.forEach((_, id) => pendingDebt.add(id));
+    }
     persist();
     await sync();
     $("set-msg").textContent = "เชื่อมต่อสำเร็จ";
@@ -340,9 +474,11 @@ function invite() {
 }
 
 function exportCsv() {
-  const rows = [["วันที่", "ประเภท", "จำนวนเงิน", "หมวด", "บันทึก", "ผู้บันทึก"]];
+  const rows = [["วันที่", "ประเภท", "จำนวนเงิน", "หมวด", "บันทึก", "ผู้บันทึก", "ตัดยอดหนี้"]];
   [...txs.values()].filter((t) => !t.deleted).sort((a, b) => a.date.localeCompare(b.date))
-    .forEach((t) => rows.push([t.date, t.type === "income" ? "รายรับ" : "รายจ่าย", (t.amount / 100).toFixed(2), t.category, t.note, t.member]));
+    .forEach((t) => rows.push([t.date, t.type === "income" ? "รายรับ" : "รายจ่าย", (t.amount / 100).toFixed(2), t.category, t.note, t.member, debts.get(t.debt_id)?.name || ""]));
+  rows.push([], ["หนี้สิน", "ยอดตั้งต้น", "จ่ายแล้ว", "คงเหลือ", "บันทึก"]);
+  debtRows().forEach((d) => rows.push([d.name, (d.principal / 100).toFixed(2), (d.paid / 100).toFixed(2), (d.left / 100).toFixed(2), d.note]));
   const csv = "﻿" + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
   const file = new File([csv], `รายรับรายจ่าย-${today()}.csv`, { type: "text/csv" });
   if (navigator.canShare?.({ files: [file] })) { navigator.share({ files: [file] }).catch(() => {}); return; }
@@ -353,7 +489,8 @@ function exportCsv() {
 }
 
 function logout() {
-  const left = pending.size ? `\nยังมี ${pending.size} รายการที่ยังส่งไม่ได้ จะหายไปด้วย` : "";
+  const waiting = pending.size + pendingDebt.size;
+  const left = waiting ? `\nยังมี ${waiting} รายการที่ยังส่งไม่ได้ จะหายไปด้วย` : "";
   if (!confirm(`ออกจากครอบครัวและลบข้อมูลในเครื่องนี้?${left}\n(ข้อมูลบนเซิร์ฟเวอร์ไม่ถูกลบ)`)) return;
   Object.values(KEY).forEach((k) => { try { localStorage.removeItem(k); } catch { /* ไม่เป็นไร */ } });
   location.reload();
@@ -370,10 +507,6 @@ function shiftMonth(delta) {
 
 function setView(v) {
   view = v;
-  $("tab-list").classList.toggle("active", v === "list");
-  $("tab-cats").classList.toggle("active", v === "cats");
-  $("tab-list").setAttribute("aria-selected", String(v === "list"));
-  $("tab-cats").setAttribute("aria-selected", String(v === "cats"));
   render();
 }
 
@@ -388,6 +521,13 @@ $("btn-prev").addEventListener("click", () => shiftMonth(-1));
 $("btn-next").addEventListener("click", () => shiftMonth(1));
 $("tab-list").addEventListener("click", () => setView("list"));
 $("tab-cats").addEventListener("click", () => setView("cats"));
+$("tab-debt").addEventListener("click", () => setView("debt"));
+$("sum-debt-card").addEventListener("click", () => setView("debt"));
+$("btn-add-debt").addEventListener("click", () => openDebt());
+$("debt-form").addEventListener("submit", saveDebt);
+$("debt-cancel").addEventListener("click", () => $("debt-dialog").close());
+$("debt-delete").addEventListener("click", deleteDebt);
+$("tx-to-debt").addEventListener("click", txToDebt);
 $("cat-expense").addEventListener("click", () => setCatType("expense"));
 $("cat-income").addEventListener("click", () => setCatType("income"));
 $("btn-add").addEventListener("click", () => openTx());
@@ -402,7 +542,7 @@ $("set-cancel").addEventListener("click", () => $("set-dialog").close());
 $("set-save").addEventListener("click", saveSettings);
 $("btn-invite").addEventListener("click", invite);
 $("btn-export").addEventListener("click", exportCsv);
-$("btn-sync").addEventListener("click", () => sync().then(() => toast(pending.size ? "ยังส่งไม่ได้" : "ซิงก์แล้ว")));
+$("btn-sync").addEventListener("click", () => sync().then(() => toast(pending.size + pendingDebt.size ? "ยังส่งไม่ได้" : "ซิงก์แล้ว")));
 $("btn-logout").addEventListener("click", logout);
 
 window.addEventListener("online", () => sync());
