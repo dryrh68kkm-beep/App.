@@ -5,6 +5,7 @@
 // GET  /api/ping              ตรวจรหัส → { ok: true }
 // GET  /api/tx?since=<ms>     รายการที่แก้หลังเวลานั้น → { items, now }
 // POST /api/tx { items: [] }  บันทึก/แก้/ลบ (deleted: 1) → { saved, now }
+// GET/POST /api/debt          หนี้สิน (ชื่อ ยอดหนี้ตั้งต้น) แบบเดียวกัน
 
 const ALLOWED_ORIGINS = [
   "https://dryrh68kkm-beep.github.io",
@@ -43,31 +44,31 @@ export default {
       await ensureSchema(env.DB);
       if (url.pathname === "/api/ping" && request.method === "GET") return json({ ok: true, now: Date.now() });
 
-      if (url.pathname === "/api/tx" && request.method === "GET") {
+      const col = COLLECTIONS[url.pathname.slice(5)];
+      if (col && request.method === "GET") {
         const since = Math.max(0, Number(url.searchParams.get("since")) || 0);
         const { results } = await env.DB
-          .prepare("SELECT * FROM tx WHERE updated_at >= ? ORDER BY updated_at LIMIT 5000")
+          .prepare(`SELECT * FROM ${col.table} WHERE updated_at >= ? ORDER BY updated_at LIMIT 5000`)
           .bind(since).all();
         return json({ items: results, now: Date.now() });
       }
 
-      if (url.pathname === "/api/tx" && request.method === "POST") {
+      if (col && request.method === "POST") {
         const body = await request.json().catch(() => null);
         const items = Array.isArray(body?.items) ? body.items : null;
         if (!items || items.length > MAX_ITEMS) return json({ error: "bad_request", message: "รูปแบบข้อมูลไม่ถูกต้อง" }, 400);
-        const clean = items.map(validate);
+        const clean = items.map(col.validate);
         const bad = clean.findIndex((x) => !x);
         if (bad >= 0) return json({ error: "bad_item", index: bad, message: "มีรายการที่ข้อมูลไม่ถูกต้อง" }, 400);
         const now = Date.now();
+        const cols = [...col.fields, "created_at", "updated_at", "deleted"];
+        const keep = new Set(["id", "created_at"]); // ไม่เปลี่ยนเมื่อแก้
         const stmt = env.DB.prepare(
-          `INSERT INTO tx (id, date, type, amount, category, note, member, created_at, updated_at, deleted)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-           ON CONFLICT(id) DO UPDATE SET date = ?2, type = ?3, amount = ?4, category = ?5, note = ?6,
-             member = ?7, updated_at = ?9, deleted = ?10`,
+          `INSERT INTO ${col.table} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `?${i + 1}`).join(", ")})
+           ON CONFLICT(id) DO UPDATE SET ${cols.map((c, i) => (keep.has(c) ? null : `${c} = ?${i + 1}`)).filter(Boolean).join(", ")}`,
         );
         if (clean.length) {
-          await env.DB.batch(clean.map((t) => stmt.bind(
-            t.id, t.date, t.type, t.amount, t.category, t.note, t.member, t.created_at, now, t.deleted)));
+          await env.DB.batch(clean.map((t) => stmt.bind(...cols.map((c) => (c === "updated_at" ? now : t[c])))));
         }
         return json({ saved: clean.length, now });
       }
@@ -79,43 +80,78 @@ export default {
   },
 };
 
-// สร้างตารางครั้งแรก (ครั้งเดียวต่อ instance) — ตรงกับ worker/schema.sql
+// สร้าง/ปรับตารางครั้งแรก (ครั้งเดียวต่อ instance) — ตรงกับ worker/schema.sql
 let schemaReady = null;
 function ensureSchema(db) {
-  schemaReady ||= db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS tx (
-      id TEXT PRIMARY KEY, date TEXT NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
-      amount INTEGER NOT NULL, category TEXT NOT NULL,
-      note TEXT NOT NULL DEFAULT '', member TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)`),
-    db.prepare("CREATE INDEX IF NOT EXISTS tx_updated ON tx(updated_at)"),
-  ]).catch((e) => { schemaReady = null; throw e; });
+  schemaReady ||= (async () => {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS tx (
+        id TEXT PRIMARY KEY, date TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+        amount INTEGER NOT NULL, category TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '', member TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)`),
+      db.prepare("CREATE INDEX IF NOT EXISTS tx_updated ON tx(updated_at)"),
+      db.prepare(`CREATE TABLE IF NOT EXISTS debt (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, principal INTEGER NOT NULL,
+        note TEXT NOT NULL DEFAULT '', member TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)`),
+      db.prepare("CREATE INDEX IF NOT EXISTS debt_updated ON debt(updated_at)"),
+    ]);
+    // รุ่นแรกไม่มีคอลัมน์ debt_id (รายจ่ายที่ตัดยอดหนี้)
+    const { results } = await db.prepare("PRAGMA table_info(tx)").all();
+    if (!results.some((c) => c.name === "debt_id")) {
+      await db.prepare("ALTER TABLE tx ADD COLUMN debt_id TEXT NOT NULL DEFAULT ''").run();
+    }
+  })().catch((e) => { schemaReady = null; throw e; });
   return schemaReady;
 }
+
+const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+const okId = (id) => /^[A-Za-z0-9_-]{8,64}$/.test(id);
+const okAmount = (n) => Number.isSafeInteger(n) && n >= 0 && n <= 1e13;
+const stamp = (t) => {
+  const created = Number(t.created_at);
+  return { created_at: Number.isSafeInteger(created) && created > 0 ? created : Date.now(), deleted: t.deleted ? 1 : 0 };
+};
 
 /** ตรวจและจัดรูปรายการที่ส่งมา (null = ไม่ถูกต้อง) */
 export function validate(t) {
   if (!t || typeof t !== "object") return null;
-  const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
   const id = str(t.id, 64);
   const date = str(t.date, 10);
   const amount = Number(t.amount);
   const category = str(t.category, 40);
-  if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) return null;
+  const debtId = str(t.debt_id, 64);
+  if (!okId(id)) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   if (t.type !== "income" && t.type !== "expense") return null;
-  if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1e13) return null;
+  if (!okAmount(amount)) return null;
   if (!category) return null;
-  const created = Number(t.created_at);
+  if (debtId && !okId(debtId)) return null;
   return {
     id, date, type: t.type, amount, category,
     note: str(t.note, 200),
     member: str(t.member, 30),
-    created_at: Number.isSafeInteger(created) && created > 0 ? created : Date.now(),
-    deleted: t.deleted ? 1 : 0,
+    debt_id: t.type === "expense" ? debtId : "",
+    ...stamp(t),
   };
 }
+
+/** หนี้: ชื่อ + ยอดหนี้ตั้งต้น (ยอดคงเหลือ = ตั้งต้น − รายจ่ายที่ตัดยอดหนี้นี้) */
+export function validateDebt(t) {
+  if (!t || typeof t !== "object") return null;
+  const id = str(t.id, 64);
+  const name = str(t.name, 60);
+  const principal = Number(t.principal);
+  if (!okId(id) || !name || !okAmount(principal)) return null;
+  return { id, name, principal, note: str(t.note, 200), member: str(t.member, 30), ...stamp(t) };
+}
+
+const COLLECTIONS = {
+  tx: { table: "tx", validate, fields: ["id", "date", "type", "amount", "category", "note", "member", "debt_id"] },
+  debt: { table: "debt", validate: validateDebt, fields: ["id", "name", "principal", "note", "member"] },
+};
 
 /** เทียบรหัสแบบใช้เวลาเท่ากัน */
 async function sameSecret(a, b) {

@@ -41,11 +41,13 @@
       <div class="sum income"><span>รายรับ</span><b id="sum-income">0</b></div>
       <div class="sum expense"><span>รายจ่าย</span><b id="sum-expense">0</b></div>
       <div class="sum balance"><span>คงเหลือ</span><b id="sum-balance">0</b></div>
+      <button id="sum-debt-card" class="sum debt" type="button" hidden><span>หนี้คงเหลือรวม</span><b id="sum-debt">0</b></button>
     </section>
 
     <div class="tabs" role="tablist">
       <button id="tab-list" class="tab active" type="button" role="tab" aria-selected="true">รายการ</button>
       <button id="tab-cats" class="tab" type="button" role="tab" aria-selected="false">ตามหมวด</button>
+      <button id="tab-debt" class="tab" type="button" role="tab" aria-selected="false">หนี้สิน</button>
     </div>
 
     <section id="view-list">
@@ -61,6 +63,17 @@
       <ol id="cat-list" class="cat-list"></ol>
       <h3 class="sub">แยกตามคน</h3>
       <ol id="member-list" class="cat-list"></ol>
+    </section>
+    <section id="view-debt" hidden>
+      <div class="debt-total">
+        <span>หนี้รวมทั้งหมด (คงเหลือ)</span>
+        <b id="debt-total">0</b>
+        <small id="debt-count"></small>
+      </div>
+      <ol id="debt-list" class="cat-list"></ol>
+      <p id="debt-empty" class="empty" hidden>ยังไม่มีหนี้ · แตะ <b>เพิ่มหนี้</b> หรือเปิดรายการรายจ่ายแล้วแตะ <b>ย้ายไปเป็นหนี้</b></p>
+      <button id="btn-add-debt" class="btn secondary wide" type="button">+ เพิ่มหนี้</button>
+      <p class="helper small">ผ่อนหนี้: บันทึกรายจ่ายตามปกติแล้วเลือก "ตัดยอดหนี้" ยอดคงเหลือจะลดลงเอง</p>
     </section>
   </main>
 
@@ -88,11 +101,30 @@
         <label class="field"><span>ใครบันทึก</span><input id="f-member" type="text" maxlength="30" autocomplete="off"></label>
       </div>
       <label class="field"><span>บันทึกเพิ่ม</span><input id="f-note" type="text" maxlength="200" autocomplete="off" placeholder="เช่น ค่าข้าวกลางวัน"></label>
+      <label id="f-debt-field" class="field" hidden><span>ตัดยอดหนี้ (ถ้าเป็นการผ่อน)</span><select id="f-debt"></select></label>
+      <button id="tx-to-debt" class="btn secondary small" type="button" hidden>ย้ายไปเป็นหนี้ (ยอดหนี้ทั้งก้อน ไม่ใช่รายจ่ายเดือนนี้)</button>
       <p id="tx-error" class="error" hidden></p>
       <div class="sheet-actions">
         <button id="tx-delete" class="btn danger-outline" type="button" hidden>ลบ</button>
         <button id="tx-cancel" class="btn secondary" type="button">ยกเลิก</button>
         <button id="tx-save" class="btn primary" type="submit">บันทึก</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- หนี้ -->
+  <dialog id="debt-dialog" class="sheet">
+    <form id="debt-form" class="sheet-body" method="dialog" novalidate>
+      <h3 id="debt-title">เพิ่มหนี้</h3>
+      <label class="field"><span>ชื่อหนี้</span><input id="d-name" type="text" maxlength="60" autocomplete="off" placeholder="เช่น ผ่อนบ้าน, บัตรเครดิต"></label>
+      <label class="field amount"><span>ยอดหนี้ตั้งต้น (บาท)</span><input id="d-principal" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
+      <label class="field"><span>บันทึกเพิ่ม</span><input id="d-note" type="text" maxlength="200" autocomplete="off" placeholder="เช่น ธนาคาร, งวดละเท่าไร"></label>
+      <p id="d-paid" class="helper"></p>
+      <p id="debt-error" class="error" hidden></p>
+      <div class="sheet-actions">
+        <button id="debt-delete" class="btn danger-outline" type="button" hidden>ลบ</button>
+        <button id="debt-cancel" class="btn secondary" type="button">ยกเลิก</button>
+        <button class="btn primary" type="submit">บันทึก</button>
       </div>
     </form>
   </dialog>

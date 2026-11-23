@@ -12,3 +12,19 @@ CREATE TABLE IF NOT EXISTS tx (
   deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS tx_updated ON tx(updated_at);
+
+-- รายจ่ายที่ตัดยอดหนี้ (เพิ่มในรุ่นที่ 2: Worker เพิ่มให้เองถ้ายังไม่มี)
+-- ALTER TABLE tx ADD COLUMN debt_id TEXT NOT NULL DEFAULT '';
+
+-- หนี้สิน: ยอดคงเหลือ = principal − ผลรวมรายจ่ายที่ debt_id ตรงกัน
+CREATE TABLE IF NOT EXISTS debt (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  principal INTEGER NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  member TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS debt_updated ON debt(updated_at);
