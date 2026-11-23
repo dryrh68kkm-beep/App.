@@ -18,14 +18,14 @@
 ## ติดตั้งเซิร์ฟเวอร์ (ทำครั้งเดียว ใน Cloudflare Dashboard)
 
 ฐานข้อมูล D1 ชื่อ `family-money` สร้างและสร้างตารางไว้แล้ว (โครงสร้างใน `worker/schema.sql`)
+`wrangler.toml` ที่หน้าแรกของ repo ผูก D1 ให้แล้ว
 
-1. **Workers & Pages → Create → Create Worker** ตั้งชื่อ `family-money` → **Deploy**
-2. **Edit code** → ลบโค้ดเดิม → วางโค้ดทั้งหมดจาก `worker/worker.js` → **Deploy**
-3. **Settings → Bindings → Add → D1 database** · Variable name: `DB` · Database: `family-money` → Save
-4. **Settings → Variables and Secrets → Add** · Type: **Secret** · Name: `FAMILY_PASSWORD` · Value: รหัสครอบครัวที่ต้องการ (ยาวอย่างน้อย 10 ตัว) → Save
-5. คัดลอกที่อยู่ Worker (เช่น `https://family-money.<ชื่อบัญชี>.workers.dev`) ไปใส่ในแอป
+1. **Workers & Pages → Create → Import a repository** → เลือก `dryrh68kkm-beep/App.`
+2. Project name: **`family-money`** (ต้องตรงกับ `name` ใน `wrangler.toml`) · Build command: เว้นว่าง · Deploy command: `npx wrangler deploy` → **Deploy**
+3. หน้า Worker → **Settings → Variables and Secrets → Add** · Type: **Secret** · Name: `FAMILY_PASSWORD` · Value: รหัสครอบครัว (ยาวอย่างน้อย 10 ตัว) → Deploy
+4. คัดลอกที่อยู่ Worker (เช่น `https://family-money.<ชื่อบัญชี>.workers.dev`) ไปใส่ในแอป
 
-ถ้าใช้คอมพิวเตอร์: `cd worker && npx wrangler deploy && npx wrangler secret put FAMILY_PASSWORD`
+ทุกครั้งที่แก้โค้ดใน `main` Cloudflare จะ deploy Worker ใหม่ให้เอง
 
 ## โครงสร้าง
 
@@ -35,7 +35,7 @@ sw.js  manifest.webmanifest     ใช้ออฟไลน์ / ติดตั
 icons/                          ไอคอนแอป
 worker/worker.js                API: /api/ping, GET/POST /api/tx
 worker/schema.sql               ตาราง D1
-worker/wrangler.toml            ตั้งค่า wrangler (ไม่มีรหัส)
+wrangler.toml                   ตั้งค่า Worker + D1 (ไม่มีรหัส)
 tests/                          Worker จำลอง + เทสต์ 2 เครื่อง (ข้อมูลจำลองเท่านั้น)
 ```
 
