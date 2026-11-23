@@ -1,0 +1,13 @@
+# Cloudflare Worker ของแอปรายรับรายจ่าย (ใช้กับ Workers Builds ที่ต่อกับ repo นี้ หรือ npx wrangler deploy)
+# ชื่อโปรเจกต์ใน Cloudflare ต้องเป็น family-money ให้ตรงกับ name
+name = "family-money"
+main = "worker/worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family-money"
+database_id = "d6c8f277-ac61-4c04-a854-d25bdc966df5"
+
+# รหัสครอบครัว: ตั้งเป็น Secret ชื่อ FAMILY_PASSWORD ใน Cloudflare (ห้ามเขียนรหัสในไฟล์นี้)
