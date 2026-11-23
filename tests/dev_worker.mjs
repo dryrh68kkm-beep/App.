@@ -1,12 +1,11 @@
 // รัน Worker ในเครื่องสำหรับทดสอบ (ฐานข้อมูล SQLite ชั่วคราวในหน่วยความจำ ข้อมูลจำลองเท่านั้น)
 // node tests/dev_worker.mjs  → http://127.0.0.1:8787  รหัสครอบครัว: test-pass
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../worker/worker.js";
 
 const sqlite = new DatabaseSync(":memory:");
-sqlite.exec(readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8"));
+// ไม่สร้างตารางล่วงหน้า: Worker ต้องสร้างเอง (ensureSchema)
 
 // ตัวแทน D1 แบบย่อ (prepare/bind/all/run/batch)
 const DB = {

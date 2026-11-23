@@ -8,6 +8,7 @@ workers_dev = true
 [[d1_databases]]
 binding = "DB"
 database_name = "family-money"
-database_id = "d6c8f277-ac61-4c04-a854-d25bdc966df5"
+# ไม่ระบุ database_id: ตอน deploy Cloudflare จะสร้าง/ผูกฐานข้อมูลชื่อนี้ในบัญชีที่ deploy ให้เอง
+# Worker สร้างตารางเองตอนใช้งานครั้งแรก (worker/worker.js → ensureSchema)
 
 # รหัสครอบครัว: ตั้งเป็น Secret ชื่อ FAMILY_PASSWORD ใน Cloudflare (ห้ามเขียนรหัสในไฟล์นี้)

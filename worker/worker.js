@@ -40,6 +40,7 @@ export default {
     }
 
     try {
+      await ensureSchema(env.DB);
       if (url.pathname === "/api/ping" && request.method === "GET") return json({ ok: true, now: Date.now() });
 
       if (url.pathname === "/api/tx" && request.method === "GET") {
@@ -77,6 +78,21 @@ export default {
     }
   },
 };
+
+// สร้างตารางครั้งแรก (ครั้งเดียวต่อ instance) — ตรงกับ worker/schema.sql
+let schemaReady = null;
+function ensureSchema(db) {
+  schemaReady ||= db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS tx (
+      id TEXT PRIMARY KEY, date TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+      amount INTEGER NOT NULL, category TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '', member TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)`),
+    db.prepare("CREATE INDEX IF NOT EXISTS tx_updated ON tx(updated_at)"),
+  ]).catch((e) => { schemaReady = null; throw e; });
+  return schemaReady;
+}
 
 /** ตรวจและจัดรูปรายการที่ส่งมา (null = ไม่ถูกต้อง) */
 export function validate(t) {

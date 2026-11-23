@@ -17,8 +17,8 @@
 
 ## ติดตั้งเซิร์ฟเวอร์ (ทำครั้งเดียว ใน Cloudflare Dashboard)
 
-ฐานข้อมูล D1 ชื่อ `family-money` สร้างและสร้างตารางไว้แล้ว (โครงสร้างใน `worker/schema.sql`)
-`wrangler.toml` ที่หน้าแรกของ repo ผูก D1 ให้แล้ว
+ตอน deploy Cloudflare จะสร้างฐานข้อมูล D1 ชื่อ `family-money` ในบัญชีให้เอง (`wrangler.toml`)
+และ Worker สร้างตารางเองตอนใช้งานครั้งแรก (โครงสร้างใน `worker/schema.sql`)
 
 1. **Workers & Pages → Create → Import a repository** → เลือก `dryrh68kkm-beep/App.`
 2. Project name: **`family-money`** (ต้องตรงกับ `name` ใน `wrangler.toml`) · Build command: เว้นว่าง · Deploy command: `npx wrangler deploy` → **Deploy**
